@@ -11,7 +11,7 @@ const morgan = require("morgan");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const GOOGLE_SAFE_BROWSING_API_KEY = process.env.GOOGLE_SAFE_BROWSING_API_KEY || "";
+const GOOGLE_WEB_RISK_API_KEY = process.env.GOOGLE_WEB_RISK_API_KEY || "";
 
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(compression());
@@ -60,17 +60,12 @@ function normalizeText(value = "") {
 
 function extractFirstUrl(value = "") {
   const text = String(value).trim();
-
   const protocolMatch = text.match(/https?:\/\/[^\s<>"']+/i);
-  if (protocolMatch) {
-    return protocolMatch[0].replace(/[),.;!?]+$/, "");
-  }
+  if (protocolMatch) return protocolMatch[0].replace(/[),.;!?]+$/, "");
 
-  // Дозволяємо також просто domain.tld/path
   const domainMatch = text.match(
     /(?:^|\s)((?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s<>"']*)?)/i
   );
-
   if (domainMatch) {
     return `https://${domainMatch[1].replace(/[),.;!?]+$/, "")}`;
   }
@@ -84,7 +79,6 @@ function isPrivateOrReservedIp(ip) {
   if (net.isIPv4(ip)) {
     const p = ip.split(".").map(Number);
     const [a, b] = p;
-
     return (
       a === 0 ||
       a === 10 ||
@@ -124,12 +118,10 @@ function parseRdapRegistrationDate(rdap) {
   const registration = events.find(
     (event) => String(event?.eventAction).toLowerCase() === "registration"
   );
-
   if (!registration?.eventDate) return null;
 
   const date = new Date(registration.eventDate);
-  if (Number.isNaN(date.getTime())) return null;
-  return date;
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 async function lookupDomain(hostname) {
@@ -160,37 +152,21 @@ async function lookupRdap(hostname) {
       {
         signal: controller.signal,
         redirect: "follow",
-        headers: {
-          Accept: "application/rdap+json, application/json"
-        }
+        headers: { Accept: "application/rdap+json, application/json" }
       }
     );
 
-    if (!response.ok) {
-      return { ok: false, status: response.status };
-    }
+    if (!response.ok) return { ok: false, status: response.status };
 
     const data = await response.json();
     const registrationDate = parseRdapRegistrationDate(data);
 
     return {
       ok: true,
-      registrationDate: registrationDate
-        ? registrationDate.toISOString()
-        : null,
+      registrationDate: registrationDate ? registrationDate.toISOString() : null,
       ageDays: registrationDate
-        ? Math.max(
-            0,
-            Math.floor((Date.now() - registrationDate.getTime()) / 86400000)
-          )
-        : null,
-      statuses: Array.isArray(data.status) ? data.status.slice(0, 10) : [],
-      nameservers: Array.isArray(data.nameservers)
-        ? data.nameservers
-            .map((n) => n.ldhName || n.unicodeName)
-            .filter(Boolean)
-            .slice(0, 8)
-        : []
+        ? Math.max(0, Math.floor((Date.now() - registrationDate.getTime()) / 86400000))
+        : null
     };
   } catch (error) {
     return { ok: false, error: error.name || "rdap_failed" };
@@ -199,8 +175,8 @@ async function lookupRdap(hostname) {
   }
 }
 
-async function checkGoogleSafeBrowsing(url) {
-  if (!GOOGLE_SAFE_BROWSING_API_KEY) {
+async function checkGoogleWebRisk(url) {
+  if (!GOOGLE_WEB_RISK_API_KEY) {
     return { configured: false, matches: [] };
   }
 
@@ -208,32 +184,16 @@ async function checkGoogleSafeBrowsing(url) {
   const timer = setTimeout(() => controller.abort(), 6000);
 
   try {
+    const params = new URLSearchParams();
+    params.append("threatTypes", "MALWARE");
+    params.append("threatTypes", "SOCIAL_ENGINEERING");
+    params.append("threatTypes", "UNWANTED_SOFTWARE");
+    params.set("uri", url);
+    params.set("key", GOOGLE_WEB_RISK_API_KEY);
+
     const response = await fetch(
-      `https://safebrowsing.googleapis.com/v4/threatMatches:find?key=${encodeURIComponent(
-        GOOGLE_SAFE_BROWSING_API_KEY
-      )}`,
-      {
-        method: "POST",
-        signal: controller.signal,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          client: {
-            clientId: "safedeal",
-            clientVersion: "0.2.0"
-          },
-          threatInfo: {
-            threatTypes: [
-              "MALWARE",
-              "SOCIAL_ENGINEERING",
-              "UNWANTED_SOFTWARE",
-              "POTENTIALLY_HARMFUL_APPLICATION"
-            ],
-            platformTypes: ["ANY_PLATFORM"],
-            threatEntryTypes: ["URL"],
-            threatEntries: [{ url }]
-          }
-        })
-      }
+      `https://webrisk.googleapis.com/v1/uris:search?${params.toString()}`,
+      { signal: controller.signal }
     );
 
     if (!response.ok) {
@@ -246,16 +206,18 @@ async function checkGoogleSafeBrowsing(url) {
     }
 
     const data = await response.json();
+    const threat = data?.threat;
+
     return {
       configured: true,
       ok: true,
-      matches: Array.isArray(data.matches) ? data.matches : []
+      matches: threat ? [threat] : []
     };
   } catch (error) {
     return {
       configured: true,
       ok: false,
-      error: error.name || "safe_browsing_failed",
+      error: error.name || "web_risk_failed",
       matches: []
     };
   } finally {
@@ -265,23 +227,14 @@ async function checkGoogleSafeBrowsing(url) {
 
 async function inspectUrl(rawUrl) {
   let parsed;
-
   try {
     parsed = new URL(rawUrl);
   } catch {
-    return {
-      ok: false,
-      reasons: ["Не вдалося розпізнати адресу посилання"],
-      technical: {}
-    };
+    return { ok: false, reasons: ["Не вдалося розпізнати адресу посилання"], technical: {} };
   }
 
   if (!["http:", "https:"].includes(parsed.protocol)) {
-    return {
-      ok: false,
-      reasons: ["Дозволені тільки HTTP/HTTPS-посилання"],
-      technical: {}
-    };
+    return { ok: false, reasons: ["Дозволені тільки HTTP/HTTPS-посилання"], technical: {} };
   }
 
   const hostname = parsed.hostname.toLowerCase().replace(/\.$/, "");
@@ -289,7 +242,7 @@ async function inspectUrl(rawUrl) {
   if (
     hostname === "localhost" ||
     hostname.endsWith(".localhost") ||
-    net.isIP(hostname) && isPrivateOrReservedIp(hostname)
+    (net.isIP(hostname) && isPrivateOrReservedIp(hostname))
   ) {
     return {
       ok: false,
@@ -304,16 +257,13 @@ async function inspectUrl(rawUrl) {
     return {
       ok: false,
       reasons: ["Домен веде на приватну або зарезервовану IP-адресу"],
-      technical: {
-        hostname,
-        dns: dnsResult.addresses
-      }
+      technical: { hostname, dns: dnsResult.addresses }
     };
   }
 
-  const [rdap, safeBrowsing] = await Promise.all([
+  const [rdap, webRisk] = await Promise.all([
     lookupRdap(hostname),
-    checkGoogleSafeBrowsing(rawUrl)
+    checkGoogleWebRisk(rawUrl)
   ]);
 
   const reasons = [];
@@ -351,15 +301,17 @@ async function inspectUrl(rawUrl) {
     facts.push("Дату реєстрації домену не вдалося підтвердити через RDAP");
   }
 
-  if (safeBrowsing.configured) {
-    if (safeBrowsing.matches.length > 0) {
+  if (webRisk.configured) {
+    if (webRisk.matches.length > 0) {
       points += 65;
-      reasons.push("Google Safe Browsing повернув збіг із базою небезпечних URL");
-    } else if (safeBrowsing.ok) {
-      facts.push("Google Safe Browsing не повернув відомих збігів для цього URL");
+      reasons.push("Google Web Risk повернув збіг із базою небезпечних URL");
+    } else if (webRisk.ok) {
+      facts.push("Google Web Risk не повернув відомих збігів для цього URL");
+    } else {
+      facts.push("Google Web Risk підключений, але перевірка тимчасово не відповіла");
     }
   } else {
-    facts.push("Google Safe Browsing ще не підключений до SafeDeal");
+    facts.push("Google Web Risk ще не підключений до SafeDeal");
   }
 
   const suspiciousHostTokens = [
@@ -391,8 +343,8 @@ async function inspectUrl(rawUrl) {
       dns: dnsResult.addresses,
       registrationDate: rdap.registrationDate || null,
       domainAgeDays: rdap.ageDays ?? null,
-      safeBrowsingConfigured: safeBrowsing.configured,
-      safeBrowsingMatches: safeBrowsing.matches.length
+      webRiskConfigured: webRisk.configured,
+      webRiskMatches: webRisk.matches.length
     }
   };
 }
@@ -423,9 +375,7 @@ function analyzeTextSignals(type, input) {
   const shortener = /bit\.ly|tinyurl|t\.co|cutt\.ly|goo\.gl/i;
   const telegram = /t\.me\/|telegram|@\w{4,}/i;
 
-  if (moneyPromises.test(text)) {
-    add(24, "Нереалістична або агресивна обіцянка заробітку");
-  }
+  if (moneyPromises.test(text)) add(24, "Нереалістична або агресивна обіцянка заробітку");
 
   if (deposit.test(text)) {
     add(26, "Просять депозит / передоплату / платну активацію");
@@ -437,9 +387,7 @@ function analyzeTextSignals(type, input) {
     actions.add("Не вводьте повні реквізити картки, CVV, PIN або SMS-коди.");
   }
 
-  if (urgency.test(text)) {
-    add(10, "Використовується тиск або штучна терміновість");
-  }
+  if (urgency.test(text)) add(10, "Використовується тиск або штучна терміновість");
 
   if (suspiciousFile.test(text)) {
     add(18, "Є згадка або посилання на потенційно небезпечне завантаження");
@@ -453,18 +401,11 @@ function analyzeTextSignals(type, input) {
     add(6, "Вакансія веде в Telegram без достатньої інформації про роботодавця");
   }
 
-  if (
-    type === "seller" &&
-    /передоплат|на\s*карт|скиньте\s*кошти/i.test(text)
-  ) {
+  if (type === "seller" && /передоплат|на\s*карт|скиньте\s*кошти/i.test(text)) {
     add(16, "Продавець наполягає на передоплаті або прямому переказі");
   }
 
-  return {
-    score,
-    reasons,
-    actions
-  };
+  return { score, reasons, actions };
 }
 
 async function analyzeInput(type, input) {
@@ -522,7 +463,7 @@ app.get("/api/health", (req, res) => {
   res.json({
     ok: true,
     service: "safedeal",
-    safeBrowsingConfigured: Boolean(GOOGLE_SAFE_BROWSING_API_KEY)
+    webRiskConfigured: Boolean(GOOGLE_WEB_RISK_API_KEY)
   });
 });
 
@@ -542,10 +483,7 @@ app.post("/api/check", async (req, res) => {
     res.json({ ok: true, report });
   } catch (error) {
     console.error("SafeDeal check error:", error);
-    res.status(500).json({
-      ok: false,
-      error: "check_failed"
-    });
+    res.status(500).json({ ok: false, error: "check_failed" });
   }
 });
 
@@ -558,8 +496,6 @@ app.get("*", (req, res) => {
 app.listen(PORT, () => {
   console.log(`SafeDeal started on port ${PORT}`);
   console.log(
-    `Google Safe Browsing: ${
-      GOOGLE_SAFE_BROWSING_API_KEY ? "configured" : "not configured"
-    }`
+    `Google Web Risk: ${GOOGLE_WEB_RISK_API_KEY ? "configured" : "not configured"}`
   );
 });

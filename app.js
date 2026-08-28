@@ -81,6 +81,56 @@ $("#runCheck").addEventListener("click", async () => {
     $("#disclaimer").textContent = r.disclaimer;
     setScoreVisual(r.score, r.level);
 
+    const techBox = $("#technicalBox");
+    const techGrid = $("#technicalGrid");
+    const factsList = $("#factsList");
+
+    const t = r.technical;
+    if (t) {
+      const ageText =
+        Number.isFinite(t.domainAgeDays) ? `${t.domainAgeDays} дн.` : "Не підтверджено";
+
+      const webRiskText =
+        t.webRiskConfigured === false
+          ? "Не підключено"
+          : t.webRiskMatches > 0
+            ? `Є збіг (${t.webRiskMatches})`
+            : "Відомих збігів немає";
+
+      techGrid.innerHTML = `
+        <div class="tech-item">
+          <span>🌐 Домен</span>
+          <b>${t.hostname || "—"}</b>
+        </div>
+        <div class="tech-item">
+          <span>🔒 Протокол</span>
+          <b>${String(t.protocol || "—").toUpperCase()}</b>
+        </div>
+        <div class="tech-item">
+          <span>📅 Вік домену</span>
+          <b>${ageText}</b>
+        </div>
+        <div class="tech-item">
+          <span>🛰 DNS</span>
+          <b>${Array.isArray(t.dns) && t.dns.length ? `${t.dns.length} адрес(и)` : "Не знайдено"}</b>
+        </div>
+        <div class="tech-item">
+          <span>🛡 Google Web Risk</span>
+          <b>${webRiskText}</b>
+        </div>
+      `;
+
+      factsList.innerHTML = (r.facts || [])
+        .map((x) => `<div class="fact">✓ <span>${x}</span></div>`)
+        .join("");
+
+      techBox.classList.remove("hidden");
+    } else {
+      techGrid.innerHTML = "";
+      factsList.innerHTML = "";
+      techBox.classList.add("hidden");
+    }
+
     const card = $("#resultCard");
     card.classList.remove("hidden");
     card.scrollIntoView({ behavior: "smooth", block: "start" });
