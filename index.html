@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#07111f">
+  <title>SafeDeal — перевіряй перед дією</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">✓</div>
+        <div>
+          <strong>SafeDeal</strong>
+          <span>Антифрод-платформа</span>
+        </div>
+      </div>
+
+      <nav class="nav">
+        <button class="nav-btn active" data-page="home">⌂ <span>Головна</span></button>
+        <button class="nav-btn" data-check="seller">♙ <span>Перевірка продавця</span></button>
+        <button class="nav-btn" data-check="job">▣ <span>Перевірка вакансії</span></button>
+        <button class="nav-btn" data-check="link">🔗 <span>Перевірка посилання</span></button>
+        <button class="nav-btn" data-check="contact">✈ <span>Telegram / номер</span></button>
+        <button class="nav-btn" data-check="text">▤ <span>Текст / скрін</span></button>
+        <button class="nav-btn" data-page="reports">⚑ <span>База скарг</span></button>
+        <button class="nav-btn" data-page="history">◷ <span>Історія</span></button>
+        <button class="nav-btn" data-page="profile">♙ <span>Профіль</span></button>
+      </nav>
+
+      <div class="side-card">
+        <span class="eyebrow">SAFEDEAL MVP</span>
+        <b>Безпечна перевірка</b>
+        <p>Не вводь паролі, PIN, CVV або SMS-коди. SafeDeal ніколи їх не просить.</p>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">ANTI-FRAUD CHECK</p>
+          <h1 id="pageTitle">Перевіряй. Аналізуй. Уникай шахраїв.</h1>
+        </div>
+        <div class="top-actions">
+          <span class="status-dot"></span>
+          <span>Система онлайн</span>
+          <button class="avatar" data-page="profile">SD</button>
+        </div>
+      </header>
+
+      <section class="page active" id="home">
+        <div class="hero">
+          <div>
+            <span class="eyebrow">SAFE BEFORE ACTION</span>
+            <h2>Перевір будь-що<br><em>підозріле</em> перед дією</h2>
+            <p>
+              Продавець, вакансія, посилання, Telegram-контакт або підозрілий текст —
+              SafeDeal збере сигнали ризику й пояснить, що саме насторожує.
+            </p>
+          </div>
+          <div class="shield-wrap">
+            <div class="shield">✓</div>
+          </div>
+        </div>
+
+        <article class="check-panel" id="quickCheck">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">QUICK CHECK</span>
+              <h3>Швидка перевірка</h3>
+            </div>
+            <span class="chip">MVP</span>
+          </div>
+
+          <div class="check-tabs">
+            <button class="check-tab active" data-type="seller">Продавець</button>
+            <button class="check-tab" data-type="job">Вакансія</button>
+            <button class="check-tab" data-type="link">Посилання</button>
+            <button class="check-tab" data-type="contact">Telegram</button>
+            <button class="check-tab" data-type="text">Текст</button>
+          </div>
+
+          <textarea id="checkInput" placeholder="Встав посилання, номер, @username або текст повідомлення..."></textarea>
+
+          <div class="privacy-note">
+            🔒 Не надсилай паролі, PIN, CVV, SMS-коди або повні реквізити картки.
+          </div>
+
+          <button class="primary full" id="runCheck">⌕ Перевірити</button>
+        </article>
+
+        <section class="result-card hidden" id="resultCard">
+          <div class="result-top">
+            <div>
+              <span class="eyebrow">RESULT</span>
+              <h3>Результат перевірки</h3>
+            </div>
+            <span class="chip" id="reportId"></span>
+          </div>
+
+          <div class="result-grid">
+            <div class="score-column">
+              <div class="score-ring" id="scoreRing">
+                <div><strong id="scoreValue">0</strong><span>/100</span></div>
+              </div>
+              <b id="scoreLabel">—</b>
+            </div>
+            <div>
+              <h4>Чому такий ризик:</h4>
+              <div class="reason-list" id="reasonList"></div>
+            </div>
+          </div>
+
+          <div class="advice-box">
+            <h4>Що робити:</h4>
+            <div id="actionList"></div>
+          </div>
+
+          <p class="disclaimer" id="disclaimer"></p>
+        </section>
+
+        <div class="section-head">
+          <div>
+            <span class="eyebrow">COMMUNITY</span>
+            <h3>Останні попередження</h3>
+          </div>
+        </div>
+
+        <div class="alerts-grid" id="alertsGrid"></div>
+      </section>
+
+      <section class="page" id="reports">
+        <article class="empty-panel">
+          <span class="eyebrow">REPORT DATABASE</span>
+          <h2>База скарг</h2>
+          <p>У наступному етапі тут буде пошук по сайту, телефону, Telegram, email та вакансіях із модерацією скарг.</p>
+        </article>
+      </section>
+
+      <section class="page" id="history">
+        <article class="empty-panel">
+          <span class="eyebrow">HISTORY</span>
+          <h2>Історія перевірок</h2>
+          <p>Після підключення акаунтів і бази даних тут зберігатимуться перевірки користувача.</p>
+        </article>
+      </section>
+
+      <section class="page" id="profile">
+        <article class="empty-panel">
+          <span class="eyebrow">PROFILE</span>
+          <h2>Профіль SafeDeal</h2>
+          <p>Акаунт, збережені об’єкти, моніторинг, скарги та SafeDeal Plus додамо на наступних етапах.</p>
+        </article>
+      </section>
+    </main>
+
+    <nav class="mobile-nav">
+      <button class="active" data-page="home">⌂<span>Головна</span></button>
+      <button data-focus-check="true">⌕<span>Перевірити</span></button>
+      <button data-page="reports">⚑<span>Скарги</span></button>
+      <button data-page="history">◷<span>Історія</span></button>
+      <button data-page="profile">♙<span>Профіль</span></button>
+    </nav>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
