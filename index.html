@@ -25,6 +25,7 @@
         <button class="nav-btn" data-check="link">🔗 <span>Перевірка посилання</span></button>
         <button class="nav-btn" data-check="contact">✈ <span>Telegram / номер</span></button>
         <button class="nav-btn" data-check="text">▤ <span>Текст / скрін</span></button>
+        <button class="nav-btn" data-page="reputation">↻ <span>Репутація</span></button>
         <button class="nav-btn" data-page="reports">⚑ <span>База скарг</span></button>
         <button class="nav-btn" data-page="history">◷ <span>Історія</span></button>
         <button class="nav-btn" data-page="profile">♙ <span>Профіль</span></button>
@@ -54,7 +55,7 @@
         <div class="hero">
           <div>
             <span class="eyebrow">SAFE BEFORE ACTION</span>
-            <h2>Перевір будь-що<br><em>підозріле</em> перед дією</h2>
+            <h2>Перевір підозріле<br><em>до того, як діяти</em></h2>
             <p>
               Продавець, вакансія, посилання, Telegram-контакт або підозрілий текст —
               SafeDeal збере сигнали ризику й пояснить, що саме насторожує.
@@ -79,10 +80,19 @@
             <button class="check-tab" data-type="job">Вакансія</button>
             <button class="check-tab" data-type="link">Посилання</button>
             <button class="check-tab" data-type="contact">Telegram</button>
-            <button class="check-tab" data-type="text">Текст</button>
+            <button class="check-tab" data-type="text">Текст / скрін</button>
           </div>
 
           <textarea id="checkInput" placeholder="Встав посилання, номер, @username або текст повідомлення..."></textarea>
+          <div class="upload-row">
+            <label class="upload-btn" for="screenshotInput">🖼 Завантажити скрін</label>
+            <input id="screenshotInput" type="file" accept="image/*" hidden>
+            <span id="screenshotName">Скрін не вибрано</span>
+          </div>
+          <div class="screenshot-preview hidden" id="screenshotPreviewWrap">
+            <img id="screenshotPreview" alt="Попередній перегляд скріну">
+            <button class="remove-shot" id="removeScreenshot" type="button">×</button>
+          </div>
 
           <div class="privacy-note">
             🔒 Не надсилай паролі, PIN, CVV, SMS-коди або повні реквізити картки.
@@ -131,7 +141,34 @@
         <div class="alerts-grid" id="alertsGrid"></div>
       </section>
 
-      <section class="page" id="reports">
+      
+      <section class="page" id="reputation">
+        <article class="empty-panel reputation-page">
+          <span class="eyebrow">REPUTATION HISTORY</span>
+          <h2>Історія репутації</h2>
+          <p>Тут ми будемо порівнювати рейтинг, кількість відгуків і публічні сліди змін у часі.</p>
+
+          <div class="rep-demo-grid">
+            <div class="rep-card">
+              <span>Було</span>
+              <strong>214</strong>
+              <small>відгуків</small>
+            </div>
+            <div class="rep-arrow">→</div>
+            <div class="rep-card warning">
+              <span>Зараз</span>
+              <strong>183</strong>
+              <small>відгуки</small>
+            </div>
+          </div>
+
+          <div class="rep-warning">
+            ⚠️ Приклад: зафіксовано зменшення кількості відгуків. SafeDeal показуватиме лише ті зміни, які реально вдалося зафіксувати або знайти в публічних архівах.
+          </div>
+        </article>
+      </section>
+
+<section class="page" id="reports">
         <article class="empty-panel">
           <span class="eyebrow">REPORT DATABASE</span>
           <h2>База скарг</h2>

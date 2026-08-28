@@ -9,7 +9,8 @@ const titles = {
   home: "Перевіряй. Аналізуй. Уникай шахраїв.",
   reports: "База скарг",
   history: "Історія перевірок",
-  profile: "Профіль"
+  profile: "Профіль",
+  reputation: "Історія репутації"
 };
 
 function showPage(id) {
@@ -110,3 +111,32 @@ async function loadAlerts() {
 }
 
 loadAlerts().catch(console.error);
+
+
+const screenshotInput = document.querySelector("#screenshotInput");
+const screenshotName = document.querySelector("#screenshotName");
+const screenshotPreview = document.querySelector("#screenshotPreview");
+const screenshotPreviewWrap = document.querySelector("#screenshotPreviewWrap");
+const removeScreenshot = document.querySelector("#removeScreenshot");
+
+if (screenshotInput) {
+  screenshotInput.addEventListener("change", () => {
+    const file = screenshotInput.files?.[0];
+    if (!file) return;
+
+    screenshotName.textContent = file.name;
+    const url = URL.createObjectURL(file);
+    screenshotPreview.src = url;
+    screenshotPreviewWrap.classList.remove("hidden");
+  });
+}
+
+if (removeScreenshot) {
+  removeScreenshot.addEventListener("click", () => {
+    if (screenshotPreview.src) URL.revokeObjectURL(screenshotPreview.src);
+    screenshotInput.value = "";
+    screenshotPreview.removeAttribute("src");
+    screenshotPreviewWrap.classList.add("hidden");
+    screenshotName.textContent = "Скрін не вибрано";
+  });
+}

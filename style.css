@@ -90,3 +90,87 @@ textarea:focus{border-color:#3d78ff}.privacy-note{margin:10px 0;padding:10px 12p
   .mobile-nav{position:fixed;display:grid;grid-template-columns:repeat(5,1fr);left:0;right:0;bottom:0;height:68px;background:rgba(7,17,31,.96);border-top:1px solid var(--line);z-index:50;backdrop-filter:blur(15px)}
   .mobile-nav button{border:0;background:transparent;color:#7087a6;display:grid;place-items:center;align-content:center;gap:2px;font-size:18px}.mobile-nav button span{font-size:9px}.mobile-nav button.active{color:#3b95ff}
 }
+
+
+.upload-row{
+  margin:10px 0;
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-wrap:wrap
+}
+.upload-btn{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  padding:10px 13px;
+  border:1px solid var(--line);
+  background:var(--panel2);
+  border-radius:10px;
+  color:#dce7f5;
+  font-size:12px;
+  cursor:pointer
+}
+.upload-row>span{font-size:10px;color:var(--muted)}
+.screenshot-preview{
+  position:relative;
+  margin:10px 0;
+  border:1px solid var(--line);
+  border-radius:13px;
+  overflow:hidden;
+  background:#07111f
+}
+.screenshot-preview img{
+  display:block;
+  width:100%;
+  max-height:320px;
+  object-fit:contain
+}
+.remove-shot{
+  position:absolute;
+  top:8px;
+  right:8px;
+  width:34px;
+  height:34px;
+  border:1px solid rgba(255,255,255,.16);
+  border-radius:50%;
+  background:rgba(4,10,18,.8);
+  color:white;
+  font-size:20px
+}
+.rep-demo-grid{
+  display:grid;
+  grid-template-columns:1fr 50px 1fr;
+  gap:12px;
+  align-items:center;
+  max-width:650px;
+  margin-top:24px
+}
+.rep-card{
+  border:1px solid var(--line);
+  background:var(--panel2);
+  border-radius:16px;
+  padding:20px
+}
+.rep-card span,.rep-card small{display:block;color:var(--muted)}
+.rep-card strong{display:block;font-size:42px;margin:6px 0}
+.rep-card.warning{border-color:rgba(255,93,103,.34)}
+.rep-arrow{text-align:center;font-size:28px;color:var(--muted)}
+.rep-warning{
+  max-width:800px;
+  margin-top:18px;
+  padding:14px;
+  border:1px solid rgba(255,191,77,.28);
+  background:rgba(255,191,77,.06);
+  color:#f2d69a;
+  border-radius:12px;
+  font-size:12px;
+  line-height:1.55
+}
+
+@media(max-width:650px){
+  .hero h2{font-size:34px;line-height:1.02}
+  .rep-demo-grid{grid-template-columns:1fr 34px 1fr}
+  .rep-card{padding:14px}
+  .rep-card strong{font-size:32px}
+}
