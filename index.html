@@ -7,7 +7,7 @@
   <title>SafeDeal — перевіряй перед дією</title>
   <meta name="description" content="SafeDeal перевіряє продавців, вакансії, посилання, Telegram, номери телефону та підозрілі повідомлення за доступними сигналами ризику.">
   <meta name="referrer" content="strict-origin-when-cross-origin">
-  <link rel="stylesheet" href="/style.css?v=7.1">
+  <link rel="stylesheet" href="/style.css?v=7.2">
 </head>
 <body>
   <div class="app-shell">
@@ -54,81 +54,40 @@
       </header>
 
       <section class="page active" id="home">
-        <section class="premium-hero">
-          <div class="premium-hero-copy">
-            <span class="launch-pill">SAFEDEAL • ONLINE SECURITY</span>
-            <h2>Перевір довіру.<br><em>Уникай обману.</em></h2>
-            <p>
-              Перевіряй продавців, Telegram, номери телефонів, посилання та підозрілі пропозиції
-              до того, як переказувати гроші або передавати дані.
-            </p>
-            <div class="hero-actions">
-              <button class="primary hero-primary" type="button" data-scroll-check>Почати перевірку</button>
-              <button class="ghost-button" type="button" data-page="reports">Переглянути скарги</button>
-            </div>
-            <div class="trust-strip">
-              <span>✓ Зрозумілий ризик 0–100</span>
-              <span>✓ Модеровані скарги</span>
-              <span>✓ Технічні сигнали</span>
+        <section class="sd-hero-v2">
+          <div class="sd-hero-copy">
+            <span class="sd-kicker">SAFEDEAL • ЗАХИСТ ПЕРЕД ДІЄЮ</span>
+            <h2>Перевіряйте. <em>Дійте безпечно.</em></h2>
+            <p>Перевіряйте посилання, продавців, вакансії, номери та Telegram на ризики шахрайства — до оплати або передачі даних.</p>
+            <div class="sd-hero-badges">
+              <span>✓ Ризик 0–100</span><span>✓ База скарг</span><span>✓ Зрозумілий висновок</span>
             </div>
           </div>
-
-          <div class="premium-device-zone" aria-hidden="true">
-            <div class="orbit orbit-one"></div>
-            <div class="orbit orbit-two"></div>
-            <div class="platform-bubble bubble-tg">TG</div>
-            <div class="platform-bubble bubble-phone">☎</div>
-            <div class="platform-bubble bubble-link">↗</div>
-            <div class="platform-bubble bubble-olx">OLX</div>
-            <div class="platform-bubble bubble-ig">IG</div>
-
-            <div class="device">
-              <div class="device-screen">
-                <div class="device-notch"></div>
-                <div class="device-brand">🛡 SafeDeal</div>
-                <div class="device-shield">✓</div>
-                <strong>Перевірка довіри</strong>
-                <small>Швидко • Зрозуміло • Безпечніше</small>
-                <div class="device-search">Номер, Telegram або посилання</div>
-                <div class="device-action">Перевірити</div>
-              </div>
-            </div>
+          <div class="sd-shield-scene" aria-hidden="true">
+            <div class="sd-shield-glow"></div>
+            <div class="sd-shield"><span>✓</span></div>
           </div>
-        </section>
-
-        <section class="platform-showcase">
-          <div class="platform-card" data-check="contact"><span class="platform-logo tg-logo">➤</span><b>Telegram</b><small>Профіль, публічні сигнали, скарги</small></div>
-          <div class="platform-card planned"><span class="platform-logo olx-logo">OLX</span><b>OLX</b><small>Модуль готується до фінального запуску</small></div>
-          <div class="platform-card planned"><span class="platform-logo ig-logo">◎</span><b>Instagram</b><small>Модуль готується до фінального запуску</small></div>
-          <div class="platform-card" data-check="phone"><span class="platform-logo phone-logo">☎</span><b>Номер</b><small>Точні збіги у базі скарг</small></div>
-          <div class="platform-card" data-check="link"><span class="platform-logo link-logo">↗</span><b>Посилання</b><small>Фішинг, домен і технічні сигнали</small></div>
-        </section>
-
-        <section class="how-strip">
-          <div><span>1</span><b>Введи дані</b><small>Номер, Telegram, URL або текст</small></div>
-          <div><span>2</span><b>SafeDeal аналізує</b><small>Сигнали ризику та скарги</small></div>
-          <div><span>3</span><b>Отримай результат</b><small>Оцінка 0–100 з поясненням</small></div>
-          <div><span>4</span><b>Приймай рішення</b><small>Перевір факти перед оплатою</small></div>
         </section>
 
         <article class="check-panel premium-check-panel" id="quickCheck">
-          <div class="panel-head">
-            <div>
-              <span class="eyebrow">QUICK CHECK</span>
-              <h3>Швидка перевірка</h3>
+          <div class="panel-head sd-check-head">
+            <div class="sd-check-title">
+              <span class="sd-search-round">⌕</span>
+              <div><span class="eyebrow">QUICK CHECK</span><h3>Швидка перевірка</h3><p>Оберіть тип даних для перевірки</p></div>
             </div>
-            <span class="chip">LIVE</span>
+            <span class="sd-safe-chip">🛡 Анонімно • Швидко • Безпечно</span>
           </div>
 
-          <div class="check-tabs">
-            <button class="check-tab active" data-type="seller">Продавець</button>
-            <button class="check-tab" data-type="job">Вакансія</button>
-            <button class="check-tab" data-type="link">Посилання</button>
-            <button class="check-tab" data-type="contact">Telegram</button>
-            <button class="check-tab" data-type="phone">Номер телефону</button>
-            <button class="check-tab" data-type="text">Текст / скрін</button>
+          <div class="check-tabs sd-check-grid">
+            <button class="check-tab active" data-type="seller"><span class="sd-tab-icon seller-icon">♟</span><strong>Продавець</strong><small>Перевірити продавця</small></button>
+            <button class="check-tab" data-type="job"><span class="sd-tab-icon job-icon">▣</span><strong>Вакансія</strong><small>Перевірити пропозицію</small></button>
+            <button class="check-tab" data-type="link"><span class="sd-tab-icon link-icon">↗</span><strong>Посилання</strong><small>Перевірити URL</small></button>
+            <button class="check-tab" data-type="contact"><span class="sd-tab-icon tg-icon">➤</span><strong>Telegram</strong><small>Канал або @username</small></button>
+            <button class="check-tab" data-type="phone"><span class="sd-tab-icon phone-icon">☎</span><strong>Номер</strong><small>Перевірити телефон</small></button>
+            <button class="check-tab" data-type="text"><span class="sd-tab-icon text-icon">▤</span><strong>Текст / скрін</strong><small>Аналіз повідомлення</small></button>
           </div>
 
+          <div class="sd-input-label"><span>Дані для перевірки</span><small id="activeModeLabel">Вставте потрібні дані нижче</small></div>
           <textarea id="checkInput" placeholder="Встав посилання, номер, @username або текст повідомлення..."></textarea>
           <div class="check-hint" id="checkHint">Для Telegram встав @username або t.me-посилання. Для скріну — завантаж зображення нижче.</div>
           <div class="upload-row">
@@ -148,7 +107,7 @@
             🔒 Не надсилай паролі, PIN, CVV, SMS-коди або повні реквізити картки.
           </div>
 
-          <button class="primary full" id="runCheck">⌕ Перевірити</button>
+          <button class="primary full sd-main-check" id="runCheck"><span>⌕</span> Перевірити</button>
         </article>
 
         <section class="result-card hidden" id="resultCard">
@@ -199,6 +158,15 @@
           </div>
 
           <p class="disclaimer" id="disclaimer"></p>
+        </section>
+
+        <section class="sd-demo-result" aria-label="Приклад результату">
+          <div class="sd-demo-top"><div><span class="eyebrow">DEMO RESULT</span><h3>Приклад результату</h3></div><span class="sd-demo-time">◷ Приклад</span></div>
+          <div class="sd-demo-body">
+            <div class="sd-demo-score"><div class="sd-score-circle"><strong>68</strong><span>/100</span></div><small>Ризик-оцінка</small></div>
+            <div class="sd-demo-info"><span class="sd-risk-pill">⚠ Високий ризик</span><h4>Є ознаки ризикової активності.</h4><p>SafeDeal показує причини ризику та що варто перевірити перед оплатою.</p><div class="sd-demo-tags"><span>Скарги: 2</span><span>Підозрілий Telegram</span><span>Ризикова пропозиція</span></div></div>
+          </div>
+          <div class="sd-demo-foot">Це приклад вигляду результату. Реальна оцінка залежить від введених даних.</div>
         </section>
 
         <div class="section-head">
