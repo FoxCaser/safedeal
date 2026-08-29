@@ -1342,3 +1342,12 @@ body{
     grid-template-columns:repeat(3,1fr) !important;
   }
 }
+
+
+/* v8.2.1 — one Quick Check only */
+.v81-actions{
+  margin-top:18px !important;
+}
+.v81-actions .v81-secondary{
+  min-width:170px;
+}
