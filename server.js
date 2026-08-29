@@ -117,8 +117,37 @@ async function initDatabase() {
     `);
     await pool.query(`ALTER TABLE community_reports ADD COLUMN IF NOT EXISTS moderator_note TEXT NOT NULL DEFAULT ''`);
     await pool.query(`ALTER TABLE community_reports ADD COLUMN IF NOT EXISTS moderated_at TIMESTAMPTZ`);
+    await pool.query(`ALTER TABLE community_reports ADD COLUMN IF NOT EXISTS submitter_client_id TEXT`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_reports_target_key ON community_reports(target_key)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_reports_status ON community_reports(status)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_reports_submitter_client ON community_reports(submitter_client_id)`);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS client_profiles (
+        client_id TEXT PRIMARY KEY,
+        nickname TEXT NOT NULL DEFAULT 'Гість',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS check_history (
+        id BIGSERIAL PRIMARY KEY,
+        client_id TEXT NOT NULL REFERENCES client_profiles(client_id) ON DELETE CASCADE,
+        report_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        input_preview TEXT NOT NULL,
+        score INTEGER NOT NULL,
+        level TEXT NOT NULL,
+        label TEXT NOT NULL,
+        reasons JSONB NOT NULL DEFAULT '[]'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(client_id, report_id)
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_check_history_client_created ON check_history(client_id, created_at DESC)`);
     databaseReady = true;
     console.log("Database: connected");
   } catch (error) {
@@ -133,6 +162,43 @@ function normalizeText(value = "") {
 
 function compactSpaces(value = "") {
   return String(value).replace(/\s+/g, " ").trim();
+}
+
+function getClientId(req) {
+  const value = String(req.get("x-client-id") || "").trim();
+  return /^[a-zA-Z0-9_-]{12,80}$/.test(value) ? value : "";
+}
+
+async function ensureClientProfile(clientId) {
+  if (!databaseReady || !pool || !clientId) return false;
+  await pool.query(
+    `INSERT INTO client_profiles (client_id) VALUES ($1)
+     ON CONFLICT (client_id) DO UPDATE SET last_seen_at = NOW()`,
+    [clientId]
+  );
+  return true;
+}
+
+async function saveCheckHistory(clientId, report, input) {
+  if (!databaseReady || !pool || !clientId || !report) return false;
+  await ensureClientProfile(clientId);
+  await pool.query(
+    `INSERT INTO check_history
+      (client_id, report_id, type, input_preview, score, level, label, reasons)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+     ON CONFLICT (client_id, report_id) DO NOTHING`,
+    [
+      clientId,
+      String(report.id || `R-${Date.now()}`).slice(0, 80),
+      String(report.type || "seller").slice(0, 24),
+      compactSpaces(input || "").slice(0, 500),
+      Math.max(0, Math.min(100, Number(report.score) || 0)),
+      String(report.level || "low").slice(0, 24),
+      String(report.label || "").slice(0, 80),
+      JSON.stringify(Array.isArray(report.reasons) ? report.reasons.slice(0, 20) : [])
+    ]
+  );
+  return true;
 }
 
 function normalizeTargetKey(value = "") {
@@ -2174,6 +2240,7 @@ app.post("/api/reports", rateLimit({ max: 20 }), async (req, res) => {
   }
 
   const code = makeReportCode();
+  const clientId = getClientId(req);
   const report = {
     code,
     target: valid.target,
@@ -2187,11 +2254,12 @@ app.post("/api/reports", rateLimit({ max: 20 }), async (req, res) => {
 
   try {
     if (databaseReady && pool) {
+      if (clientId) await ensureClientProfile(clientId);
       await pool.query(
         `INSERT INTO community_reports
-          (code, target, target_key, type, reason, details, status)
-         VALUES ($1, $2, $3, $4, $5, $6, 'pending')`,
-        [code, valid.target, valid.targetKey, valid.type, valid.reason, valid.details]
+          (code, target, target_key, type, reason, details, status, submitter_client_id)
+         VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)`,
+        [code, valid.target, valid.targetKey, valid.type, valid.reason, valid.details, clientId || null]
       );
     } else {
       memoryPendingReports.unshift(report);
@@ -2227,6 +2295,133 @@ app.get("/api/reports/status/:code", async (req, res) => {
     res.json({ ok: true, report: { code: found.code, status: found.status, createdAt: found.createdAt } });
   } catch (error) {
     res.status(500).json({ ok: false, error: "status_failed" });
+  }
+});
+
+app.get("/api/profile", rateLimit({ max: 240 }), async (req, res) => {
+  const clientId = getClientId(req);
+  if (!clientId) return res.status(400).json({ ok: false, error: "client_id_required" });
+  if (!databaseReady || !pool) return res.status(503).json({ ok: false, error: "database_unavailable" });
+
+  try {
+    await ensureClientProfile(clientId);
+    const { rows } = await pool.query(
+      `SELECT p.client_id, p.nickname, p.created_at, p.updated_at,
+              COALESCE(h.check_count, 0)::int AS check_count,
+              h.last_check_at,
+              COALESCE(r.report_count, 0)::int AS report_count,
+              COALESCE(r.pending_count, 0)::int AS pending_count,
+              COALESCE(r.approved_count, 0)::int AS approved_count,
+              COALESCE(r.rejected_count, 0)::int AS rejected_count
+       FROM client_profiles p
+       LEFT JOIN (
+         SELECT client_id, COUNT(*) AS check_count, MAX(created_at) AS last_check_at
+         FROM check_history WHERE client_id = $1 GROUP BY client_id
+       ) h ON h.client_id = p.client_id
+       LEFT JOIN (
+         SELECT submitter_client_id AS client_id,
+                COUNT(*) AS report_count,
+                COUNT(*) FILTER (WHERE status = 'pending') AS pending_count,
+                COUNT(*) FILTER (WHERE status = 'approved') AS approved_count,
+                COUNT(*) FILTER (WHERE status = 'rejected') AS rejected_count
+         FROM community_reports WHERE submitter_client_id = $1 GROUP BY submitter_client_id
+       ) r ON r.client_id = p.client_id
+       WHERE p.client_id = $1
+       LIMIT 1`,
+      [clientId]
+    );
+    res.json({ ok: true, profile: rows[0] });
+  } catch (error) {
+    console.error("Profile load error:", error);
+    res.status(500).json({ ok: false, error: "profile_failed" });
+  }
+});
+
+app.patch("/api/profile", rateLimit({ max: 60 }), async (req, res) => {
+  const clientId = getClientId(req);
+  if (!clientId) return res.status(400).json({ ok: false, error: "client_id_required" });
+  if (!databaseReady || !pool) return res.status(503).json({ ok: false, error: "database_unavailable" });
+
+  const nickname = compactSpaces(req.body?.nickname || "").slice(0, 40);
+  if (nickname.length < 2) return res.status(400).json({ ok: false, error: "invalid_nickname" });
+
+  try {
+    await ensureClientProfile(clientId);
+    const { rows } = await pool.query(
+      `UPDATE client_profiles SET nickname = $1, updated_at = NOW(), last_seen_at = NOW()
+       WHERE client_id = $2 RETURNING client_id, nickname, created_at, updated_at`,
+      [nickname, clientId]
+    );
+    res.json({ ok: true, profile: rows[0] });
+  } catch (error) {
+    console.error("Profile update error:", error);
+    res.status(500).json({ ok: false, error: "profile_update_failed" });
+  }
+});
+
+app.get("/api/history", rateLimit({ max: 240 }), async (req, res) => {
+  const clientId = getClientId(req);
+  if (!clientId) return res.status(400).json({ ok: false, error: "client_id_required" });
+  if (!databaseReady || !pool) return res.status(503).json({ ok: false, error: "database_unavailable" });
+
+  try {
+    await ensureClientProfile(clientId);
+    const { rows } = await pool.query(
+      `SELECT id, report_id, type, input_preview, score, level, label, reasons, created_at
+       FROM check_history WHERE client_id = $1
+       ORDER BY created_at DESC LIMIT 100`,
+      [clientId]
+    );
+    res.json({ ok: true, items: rows });
+  } catch (error) {
+    console.error("History load error:", error);
+    res.status(500).json({ ok: false, error: "history_failed" });
+  }
+});
+
+app.delete("/api/history", rateLimit({ max: 30 }), async (req, res) => {
+  const clientId = getClientId(req);
+  if (!clientId) return res.status(400).json({ ok: false, error: "client_id_required" });
+  if (!databaseReady || !pool) return res.status(503).json({ ok: false, error: "database_unavailable" });
+
+  try {
+    const result = await pool.query(`DELETE FROM check_history WHERE client_id = $1`, [clientId]);
+    res.json({ ok: true, deleted: result.rowCount || 0 });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "history_clear_failed" });
+  }
+});
+
+app.post("/api/history/import", rateLimit({ max: 10 }), async (req, res) => {
+  const clientId = getClientId(req);
+  if (!clientId) return res.status(400).json({ ok: false, error: "client_id_required" });
+  if (!databaseReady || !pool) return res.status(503).json({ ok: false, error: "database_unavailable" });
+  const items = Array.isArray(req.body?.items) ? req.body.items.slice(0, 30) : [];
+
+  try {
+    await ensureClientProfile(clientId);
+    let imported = 0;
+    for (const item of items) {
+      const reportId = String(item?.id || "").slice(0, 80);
+      const input = compactSpaces(item?.input || "").slice(0, 500);
+      if (!reportId || !input) continue;
+      const score = Math.max(0, Math.min(100, Number(item?.score) || 0));
+      const type = ALLOWED_TYPES.has(item?.type) ? item.type : "seller";
+      const created = new Date(item?.createdAt || Date.now());
+      const createdAt = Number.isNaN(created.getTime()) ? new Date() : created;
+      const result = await pool.query(
+        `INSERT INTO check_history
+          (client_id, report_id, type, input_preview, score, level, label, reasons, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'[]'::jsonb,$8)
+         ON CONFLICT (client_id, report_id) DO NOTHING`,
+        [clientId, reportId, type, input, score, String(item?.level || "low").slice(0,24), String(item?.label || "").slice(0,80), createdAt]
+      );
+      imported += result.rowCount || 0;
+    }
+    res.json({ ok: true, imported });
+  } catch (error) {
+    console.error("History import error:", error);
+    res.status(500).json({ ok: false, error: "history_import_failed" });
   }
 });
 
@@ -2313,7 +2508,16 @@ app.post("/api/check", rateLimit({ max: 80 }), async (req, res) => {
 
   try {
     const report = await analyzeInput(type, input);
-    res.json({ ok: true, report });
+    const clientId = getClientId(req);
+    let historySaved = false;
+    if (clientId && databaseReady) {
+      try {
+        historySaved = await saveCheckHistory(clientId, report, input);
+      } catch (historyError) {
+        console.error("History save error:", historyError.message);
+      }
+    }
+    res.json({ ok: true, report, historySaved });
   } catch (error) {
     console.error("SafeDeal check error:", error);
     res.status(500).json({ ok: false, error: "check_failed" });

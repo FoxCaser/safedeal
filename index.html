@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#07111f">
   <title>SafeDeal — перевіряй перед дією</title>
-  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/style.css?v=6.0">
 </head>
 <body>
   <div class="app-shell">
@@ -224,9 +224,9 @@
         <article class="empty-panel history-page">
           <div class="history-head">
             <div>
-              <span class="eyebrow">HISTORY</span>
+              <span class="eyebrow">CLOUD HISTORY</span>
               <h2>Історія перевірок</h2>
-              <p>Останні перевірки зберігаються на цьому пристрої в браузері.</p>
+              <p id="historySyncStatus">Історія зберігається в PostgreSQL для цього браузера.</p>
             </div>
             <button id="clearHistory" class="secondary-btn">Очистити</button>
           </div>
@@ -235,10 +235,33 @@
       </section>
 
       <section class="page" id="profile">
-        <article class="empty-panel">
-          <span class="eyebrow">PROFILE</span>
+        <article class="empty-panel profile-page">
+          <span class="eyebrow">PROFILE BETA</span>
           <h2>Профіль SafeDeal</h2>
-          <p>Акаунт, збережені об’єкти, моніторинг, скарги та SafeDeal Plus додамо на наступних етапах.</p>
+          <p class="profile-copy">Поки це профіль цього браузера: перевірки та скарги зберігаються в PostgreSQL. Вхід через email і синхронізацію між пристроями додамо наступним етапом.</p>
+
+          <div class="profile-grid">
+            <section class="profile-card">
+              <span class="profile-kicker">ІМ’Я ПРОФІЛЮ</span>
+              <div class="profile-edit-row">
+                <input id="profileNickname" class="text-input" maxlength="40" placeholder="Наприклад: Fox">
+                <button id="saveProfile" class="primary">Зберегти</button>
+              </div>
+              <div id="profileStatus" class="profile-status">Завантажуємо профіль…</div>
+            </section>
+
+            <section class="profile-card">
+              <span class="profile-kicker">СТАТИСТИКА</span>
+              <div class="profile-stats">
+                <div><b id="profileChecks">0</b><span>Перевірок</span></div>
+                <div><b id="profileReports">0</b><span>Скарг</span></div>
+                <div><b id="profilePending">0</b><span>На модерації</span></div>
+                <div><b id="profileApproved">0</b><span>Схвалено</span></div>
+              </div>
+            </section>
+          </div>
+
+          <div class="profile-footer-line">Профіль створено: <b id="profileSince">—</b></div>
         </article>
       </section>
     </main>
@@ -252,6 +275,6 @@
     </nav>
   </div>
 
-  <script src="/app.js"></script>
+  <script src="/app.js?v=6.0"></script>
 </body>
 </html>

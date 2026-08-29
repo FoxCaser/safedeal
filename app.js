@@ -22,6 +22,26 @@ function escapeHtml(value = "") {
     .replaceAll("'", "&#039;");
 }
 
+function getClientId() {
+  const key = "safedeal_client_id_v1";
+  let id = localStorage.getItem(key) || "";
+  if (!/^[a-zA-Z0-9_-]{12,80}$/.test(id)) {
+    const random = globalThis.crypto?.randomUUID
+      ? globalThis.crypto.randomUUID().replaceAll("-", "")
+      : `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+    id = `sd_${random}`.slice(0, 70);
+    localStorage.setItem(key, id);
+  }
+  return id;
+}
+
+async function apiFetch(url, options = {}) {
+  const headers = new Headers(options.headers || {});
+  headers.set("x-client-id", getClientId());
+  if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  return fetch(url, { ...options, headers });
+}
+
 function showPage(id) {
   $$(".page").forEach((p) => p.classList.toggle("active", p.id === id));
   $$('[data-page]').forEach((b) => b.classList.toggle("active", b.dataset.page === id));
@@ -29,7 +49,8 @@ function showPage(id) {
   window.scrollTo({ top: 0, behavior: "smooth" });
 
   if (id === "reports") loadReports().catch(console.error);
-  if (id === "history") renderHistory();
+  if (id === "history") loadHistory().catch(console.error);
+  if (id === "profile") loadProfile().catch(console.error);
 }
 
 function selectType(type) {
@@ -63,7 +84,7 @@ function setScoreVisual(score, level) {
   $("#scoreLabel").style.color = color;
 }
 
-function getHistory() {
+function getLocalHistory() {
   try {
     const raw = localStorage.getItem("safedeal_history_v1");
     const items = raw ? JSON.parse(raw) : [];
@@ -73,39 +94,58 @@ function getHistory() {
   }
 }
 
-function saveHistory(report, input) {
-  const items = getHistory();
+function saveLocalHistory(report, input) {
+  const items = getLocalHistory();
   items.unshift({
     id: report.id,
     type: report.type,
     input: String(input).slice(0, 240),
     score: report.score,
+    level: report.level,
     label: report.label,
     createdAt: new Date().toISOString()
   });
-
   localStorage.setItem("safedeal_history_v1", JSON.stringify(items.slice(0, 30)));
 }
 
-function renderHistory() {
+async function migrateLocalHistory() {
+  if (localStorage.getItem("safedeal_history_cloud_migrated_v1") === "1") return;
+  const items = getLocalHistory();
+  if (!items.length) {
+    localStorage.setItem("safedeal_history_cloud_migrated_v1", "1");
+    return;
+  }
+  try {
+    const res = await apiFetch("/api/history/import", {
+      method: "POST",
+      body: JSON.stringify({ items })
+    });
+    const data = await res.json();
+    if (res.ok && data.ok) localStorage.setItem("safedeal_history_cloud_migrated_v1", "1");
+  } catch {}
+}
+
+function renderHistoryItems(items, source = "cloud") {
   const wrap = $("#historyList");
   if (!wrap) return;
 
-  const items = getHistory();
   if (!items.length) {
     wrap.innerHTML = `<div class="empty-state">Історія поки порожня. Виконай першу перевірку.</div>`;
     return;
   }
 
   wrap.innerHTML = items.map((item) => {
-    const date = new Date(item.createdAt);
+    const createdAt = item.created_at || item.createdAt;
+    const input = item.input_preview || item.input || "";
+    const date = new Date(createdAt);
     const shownDate = Number.isNaN(date.getTime()) ? "—" : date.toLocaleString("uk-UA");
     return `
       <article class="history-item">
-        <div>
-          <span class="history-type">${escapeHtml(item.type)}</span>
-          <h4>${escapeHtml(item.input)}</h4>
-          <small>${escapeHtml(shownDate)}</small>
+        <div class="history-main">
+          <span class="history-type">${escapeHtml(typeLabel(item.type))}</span>
+          <h4>${escapeHtml(input)}</h4>
+          <small>${escapeHtml(shownDate)}${source === "cloud" ? " · PostgreSQL" : " · цей пристрій"}</small>
+          <button class="history-recheck" data-recheck="${escapeHtml(input)}" data-recheck-type="${escapeHtml(item.type || "seller")}">Перевірити знову</button>
         </div>
         <div class="history-score">${Number(item.score) || 0}<span>/100</span></div>
       </article>
@@ -113,11 +153,104 @@ function renderHistory() {
   }).join("");
 }
 
+async function loadHistory() {
+  const wrap = $("#historyList");
+  const sync = $("#historySyncStatus");
+  if (wrap) wrap.innerHTML = `<div class="empty-state">Завантажуємо історію…</div>`;
+  if (sync) sync.textContent = "Синхронізація з базою…";
+
+  await migrateLocalHistory();
+  try {
+    const res = await apiFetch("/api/history", { cache: "no-store" });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || "history_failed");
+    renderHistoryItems(data.items || [], "cloud");
+    if (sync) sync.textContent = "Історія зберігається в PostgreSQL для цього браузера.";
+  } catch (e) {
+    renderHistoryItems(getLocalHistory(), "local");
+    if (sync) sync.textContent = "База тимчасово недоступна — показано локальну історію цього пристрою.";
+  }
+}
+
 const clearHistory = $("#clearHistory");
 if (clearHistory) {
-  clearHistory.addEventListener("click", () => {
-    localStorage.removeItem("safedeal_history_v1");
-    renderHistory();
+  clearHistory.addEventListener("click", async () => {
+    if (!confirm("Очистити історію перевірок цього профілю?")) return;
+    clearHistory.disabled = true;
+    try {
+      await apiFetch("/api/history", { method: "DELETE" });
+      localStorage.removeItem("safedeal_history_v1");
+      localStorage.setItem("safedeal_history_cloud_migrated_v1", "1");
+      await loadHistory();
+      loadProfile().catch(()=>{});
+    } finally {
+      clearHistory.disabled = false;
+    }
+  });
+}
+
+const historyList = $("#historyList");
+if (historyList) {
+  historyList.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-recheck]");
+    if (!btn) return;
+    const input = btn.dataset.recheck || "";
+    const type = btn.dataset.recheckType || "seller";
+    state.type = type;
+    $("#checkInput").value = input;
+    $$(".check-tab").forEach((b) => b.classList.toggle("active", b.dataset.type === type));
+    showPage("home");
+    setTimeout(() => $("#runCheck").click(), 100);
+  });
+}
+
+async function loadProfile() {
+  const status = $("#profileStatus");
+  if (status) status.textContent = "Завантажуємо профіль…";
+  try {
+    const res = await apiFetch("/api/profile", { cache: "no-store" });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || "profile_failed");
+    const p = data.profile || {};
+    if ($("#profileNickname")) $("#profileNickname").value = p.nickname || "Гість";
+    if ($("#profileChecks")) $("#profileChecks").textContent = Number(p.check_count) || 0;
+    if ($("#profileReports")) $("#profileReports").textContent = Number(p.report_count) || 0;
+    if ($("#profilePending")) $("#profilePending").textContent = Number(p.pending_count) || 0;
+    if ($("#profileApproved")) $("#profileApproved").textContent = Number(p.approved_count) || 0;
+    if ($("#profileSince")) {
+      const d = new Date(p.created_at);
+      $("#profileSince").textContent = Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString("uk-UA");
+    }
+    if (status) status.textContent = "Профіль активний. Дані прив’язані до цього браузера.";
+  } catch (e) {
+    if (status) status.textContent = "Не вдалося завантажити профіль з бази.";
+  }
+}
+
+const saveProfileBtn = $("#saveProfile");
+if (saveProfileBtn) {
+  saveProfileBtn.addEventListener("click", async () => {
+    const nickname = $("#profileNickname").value.trim();
+    const status = $("#profileStatus");
+    if (nickname.length < 2) {
+      status.textContent = "Ім’я має містити щонайменше 2 символи.";
+      return;
+    }
+    saveProfileBtn.disabled = true;
+    status.textContent = "Зберігаємо…";
+    try {
+      const res = await apiFetch("/api/profile", {
+        method: "PATCH",
+        body: JSON.stringify({ nickname })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || "profile_update_failed");
+      status.textContent = "Ім’я збережено ✅";
+    } catch {
+      status.textContent = "Не вдалося зберегти ім’я.";
+    } finally {
+      saveProfileBtn.disabled = false;
+    }
   });
 }
 
@@ -133,7 +266,7 @@ $("#runCheck").addEventListener("click", async () => {
   button.textContent = "Перевіряємо...";
 
   try {
-    const res = await fetch("/api/check", {
+    const res = await apiFetch("/api/check", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ type: state.type, input })
@@ -312,7 +445,7 @@ $("#runCheck").addEventListener("click", async () => {
       techBox.classList.toggle("hidden", !(r.facts || []).length);
     }
 
-    saveHistory(r, input);
+    saveLocalHistory(r, input);
 
     const card = $("#resultCard");
     card.classList.remove("hidden");
@@ -422,7 +555,7 @@ if (submitReport) {
     status.textContent = "";
 
     try {
-      const res = await fetch("/api/reports", {
+      const res = await apiFetch("/api/reports", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ target, type, reason, details })
