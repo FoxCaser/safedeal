@@ -7,7 +7,7 @@
   <title>SafeDeal — перевіряй перед дією</title>
   <meta name="description" content="SafeDeal перевіряє продавців, вакансії, посилання, Telegram, Facebook, Instagram, WhatsApp, Viber, OLX, номери телефону та підозрілі повідомлення за доступними сигналами ризику.">
   <meta name="referrer" content="strict-origin-when-cross-origin">
-  <link rel="stylesheet" href="/style.css?v=8.1">
+  <link rel="stylesheet" href="/style.css?v=8.2">
 </head>
 <body>
   <div class="app-shell">
@@ -83,6 +83,57 @@
           </div>
         </section>
 
+
+        <article class="check-panel premium-check-panel" id="quickCheck">
+          <div class="panel-head sd-check-head">
+            <div class="sd-check-title">
+              <span class="sd-search-round">⌕</span>
+              <div><span class="eyebrow">QUICK CHECK</span><h3>Швидка перевірка</h3><p>Оберіть тип даних для перевірки</p></div>
+            </div>
+            <span class="sd-safe-chip">🛡 Анонімно • Швидко • Безпечно</span>
+          </div>
+
+          <div class="check-tabs v8-check-grid">
+            <button class="check-tab active" data-type="seller"><span class="sd-tab-icon seller-icon">♟</span><strong>Продавець</strong><small>Угода / контакт</small></button>
+            <button class="check-tab" data-type="phone"><span class="sd-tab-icon phone-icon">☎</span><strong>Номер</strong><small>Телефон</small></button>
+            <button class="check-tab" data-type="link"><span class="sd-tab-icon link-icon">↗</span><strong>Посилання</strong><small>URL / сайт</small></button>
+            <button class="check-tab" data-type="contact"><span class="sd-tab-icon tg-icon">➤</span><strong>Telegram</strong><small>@username / t.me</small></button>
+            <button class="check-tab" data-type="facebook"><span class="sd-tab-icon fb-icon">f</span><strong>Facebook</strong><small>Профіль / сторінка</small></button>
+            <button class="check-tab" data-type="instagram"><span class="sd-tab-icon ig-icon">◎</span><strong>Instagram</strong><small>@username / URL</small></button>
+            <button class="check-tab" data-type="whatsapp"><span class="sd-tab-icon wa-icon">◉</span><strong>WhatsApp</strong><small>Номер / wa.me</small></button>
+            <button class="check-tab" data-type="viber"><span class="sd-tab-icon vb-icon">✆</span><strong>Viber</strong><small>Номер / URL</small></button>
+            <button class="check-tab" data-type="olx"><span class="sd-tab-icon olx-icon">OLX</span><strong>OLX</strong><small>Оголошення</small></button>
+            <button class="check-tab" data-type="job"><span class="sd-tab-icon job-icon">▣</span><strong>Вакансія</strong><small>Робота / заробіток</small></button>
+            <button class="check-tab" data-type="text"><span class="sd-tab-icon text-icon">▤</span><strong>Текст / скрін</strong><small>OCR / повідомлення</small></button>
+          </div>
+
+          <div class="sd-input-label"><span>Дані для перевірки</span><small id="activeModeLabel">Вставте потрібні дані нижче</small></div>
+          <textarea id="checkInput" placeholder="Встав посилання, номер, @username або текст повідомлення..."></textarea>
+          <div class="check-hint" id="checkHint">Для Telegram встав @username або t.me-посилання. Для скріну — завантаж зображення нижче.</div>
+          <div class="v8-context-note">Для продавця / OLX можеш додати текст відгуків або опис підозрілої поведінки. SafeDeal шукатиме шаблонні відгуки, різкі сплески та надані ознаки прихованих негативних відгуків — без тверджень без доказів.</div>
+          <div class="upload-row">
+            <label class="upload-btn" for="screenshotInput">🖼 Завантажити скрін</label>
+            <input id="screenshotInput" type="file" accept="image/*" hidden>
+            <span id="screenshotName">Скрін не вибрано</span>
+          </div>
+          <div class="screenshot-preview hidden" id="screenshotPreviewWrap">
+            <img id="screenshotPreview" alt="Попередній перегляд скріну">
+            <button class="remove-shot" id="removeScreenshot" type="button">×</button>
+          </div>
+          <div class="ocr-status hidden" id="ocrStatus"></div>
+
+          <div class="privacy-note">
+            🧠 OCR скріншота виконується у твоєму браузері. Саме зображення не завантажується на сервер SafeDeal; для аналізу надсилається лише розпізнаний текст.<br>
+
+            🔒 Не надсилай паролі, PIN, CVV, SMS-коди або повні реквізити картки.
+          </div>
+
+          <button class="primary full sd-main-check" id="runCheck"><span>⌕</span> Перевірити</button>
+        </article>
+
+
+
+        <div class="v82-platform-heading"><span>ПЛАТФОРМИ</span><b>Перевірка соцмереж і сервісів</b></div>
         <section class="v8-platform-launcher">
           <button data-check="contact"><i class="v8-icon tg">➤</i><span><b>Telegram</b><small>Канал / профіль</small></span></button>
           <button data-check="facebook"><i class="v8-icon fb">f</i><span><b>Facebook</b><small>Профіль / сторінка</small></span></button>
@@ -379,6 +430,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js" defer></script>
-  <script src="/app.js?v=8.1" defer></script>
+  <script src="/app.js?v=8.2" defer></script>
 </body>
 </html>

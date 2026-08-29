@@ -1160,3 +1160,185 @@ body{
   .v81-stats b{font-size:19px}
   .v81-stats span{font-size:9px}
 }
+
+
+/* =============================================================
+   SAFEDEAL v8.2 — QUICK CHECK FIRST
+   ============================================================= */
+
+#quickCheck{
+  margin-top:18px !important;
+  scroll-margin-top:88px;
+}
+
+.v82-platform-heading{
+  margin:26px 4px 10px;
+  display:flex;
+  align-items:end;
+  justify-content:space-between;
+  gap:12px;
+}
+.v82-platform-heading span{
+  color:#58b8ff;
+  font-size:10px;
+  font-weight:900;
+  letter-spacing:.16em;
+}
+.v82-platform-heading b{
+  color:#dfe8ff;
+  font-size:13px;
+}
+
+.v8-platform-launcher{
+  margin-top:0 !important;
+}
+
+/* Reduce visual weight of the intro so the actual checker appears sooner. */
+.v81-hero{
+  min-height:auto !important;
+  padding:28px 30px !important;
+}
+.v81-hero h2{
+  margin-bottom:14px !important;
+}
+.v81-hero p{
+  margin-bottom:0 !important;
+}
+.v81-shield{
+  width:118px !important;
+  height:118px !important;
+  font-size:54px !important;
+}
+.v81-stats{
+  margin-top:20px !important;
+}
+.v81-stats>div{
+  padding:11px 14px !important;
+}
+
+/* More saturated but cleaner interactive states. */
+.v8-check-grid .check-tab{
+  border-color:#28538d !important;
+  box-shadow:inset 0 0 24px rgba(23,103,255,.035);
+}
+.v8-check-grid .check-tab.active{
+  background:linear-gradient(135deg,#0e60dc 0%,#4b44ee 55%,#a92de5 100%) !important;
+  border-color:#6687ff !important;
+  box-shadow:
+    0 0 0 1px rgba(130,97,255,.18),
+    0 12px 30px rgba(53,68,215,.26) !important;
+}
+
+.sd-main-check{
+  background:linear-gradient(100deg,#00a8ff 0%,#3e67ff 48%,#cf30f6 100%) !important;
+  box-shadow:
+    0 14px 38px rgba(34,83,255,.38),
+    0 0 34px rgba(150,49,255,.15) !important;
+}
+
+.v8-platform-launcher button{
+  border-color:#2b558e !important;
+  background:
+    radial-gradient(100px 80px at 5% 10%,rgba(41,121,255,.10),transparent 70%),
+    linear-gradient(150deg,#0a1830,#07111f) !important;
+}
+
+/* Mobile: the checker must be visible as early as possible. */
+@media(max-width:700px){
+  .v81-hero{
+    padding:20px 16px !important;
+    border-radius:18px !important;
+  }
+  .v81-brandline{
+    grid-template-columns:1fr auto !important;
+    gap:12px !important;
+  }
+  .v81-hero h2{
+    font-size:36px !important;
+    margin:9px 0 10px !important;
+  }
+  .v81-hero p{
+    font-size:14px !important;
+    line-height:1.45 !important;
+  }
+  .v81-actions{
+    margin-top:16px !important;
+  }
+  .v81-actions .primary,
+  .v81-secondary{
+    min-height:48px !important;
+    padding:0 14px !important;
+    font-size:13px !important;
+  }
+  .v81-shield{
+    width:82px !important;
+    height:82px !important;
+    font-size:36px !important;
+  }
+  .v81-stats{
+    margin-top:15px !important;
+    gap:7px !important;
+  }
+  .v81-stats>div{
+    padding:9px 8px !important;
+  }
+  .v81-stats b{
+    font-size:17px !important;
+  }
+  .v81-stats span{
+    font-size:8px !important;
+  }
+
+  #quickCheck{
+    margin-top:14px !important;
+    padding:18px 14px !important;
+  }
+  .sd-check-head{
+    margin-bottom:13px !important;
+  }
+  .sd-check-head h3{
+    font-size:24px !important;
+  }
+  .sd-safe-chip{
+    display:none !important;
+  }
+  .v8-check-grid{
+    gap:7px !important;
+  }
+  .v8-check-grid .check-tab{
+    min-height:68px !important;
+    padding:10px !important;
+  }
+  .v8-check-grid .check-tab strong{
+    font-size:11px !important;
+  }
+  .v8-check-grid .check-tab small{
+    font-size:8px !important;
+  }
+  #checkInput{
+    min-height:112px !important;
+  }
+
+  .v82-platform-heading{
+    margin-top:22px !important;
+  }
+  .v82-platform-heading b{
+    font-size:11px !important;
+  }
+}
+
+/* Very narrow phones: keep the top compact rather than forcing horizontal overflow. */
+@media(max-width:430px){
+  .v81-brandline{
+    grid-template-columns:1fr !important;
+  }
+  .v81-shield{
+    display:none !important;
+  }
+  .v81-hero h2{
+    font-size:34px !important;
+  }
+  .v81-stats{
+    grid-template-columns:repeat(3,1fr) !important;
+  }
+}
