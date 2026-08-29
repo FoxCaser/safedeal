@@ -4,6 +4,9 @@ const express = require("express");
 const path = require("path");
 const dns = require("dns").promises;
 const net = require("net");
+const http = require("http");
+const https = require("https");
+const tls = require("tls");
 const helmet = require("helmet");
 const compression = require("compression");
 const cors = require("cors");
@@ -209,13 +212,15 @@ function scoreToLevel(score) {
 
 function parseRdapRegistrationDate(rdap) {
   const events = Array.isArray(rdap?.events) ? rdap.events : [];
-  const registration = events.find(
-    (event) => String(event?.eventAction).toLowerCase() === "registration"
-  );
-  if (!registration?.eventDate) return null;
+  const preferredActions = new Set(["registration", "registered", "creation", "created"]);
+  const candidates = events
+    .filter((event) => preferredActions.has(String(event?.eventAction || "").toLowerCase()))
+    .map((event) => new Date(event?.eventDate))
+    .filter((date) => !Number.isNaN(date.getTime()));
 
-  const date = new Date(registration.eventDate);
-  return Number.isNaN(date.getTime()) ? null : date;
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => a.getTime() - b.getTime());
+  return candidates[0];
 }
 
 async function lookupDomain(hostname) {
@@ -236,37 +241,362 @@ async function lookupDomain(hostname) {
   }
 }
 
-async function lookupRdap(hostname) {
+async function fetchJsonWithTimeout(url, timeoutMs = 4500, headers = {}) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 6000);
-
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(
-      `https://rdap.org/domain/${encodeURIComponent(hostname)}`,
-      {
-        signal: controller.signal,
-        redirect: "follow",
-        headers: { Accept: "application/rdap+json, application/json" }
-      }
-    );
-
-    if (!response.ok) return { ok: false, status: response.status };
-
+    const response = await fetch(url, {
+      signal: controller.signal,
+      redirect: "follow",
+      headers
+    });
+    if (!response.ok) return { ok: false, status: response.status, data: null };
     const data = await response.json();
-    const registrationDate = parseRdapRegistrationDate(data);
-
-    return {
-      ok: true,
-      registrationDate: registrationDate ? registrationDate.toISOString() : null,
-      ageDays: registrationDate
-        ? Math.max(0, Math.floor((Date.now() - registrationDate.getTime()) / 86400000))
-        : null
-    };
+    return { ok: true, status: response.status, data };
   } catch (error) {
-    return { ok: false, error: error.name || "rdap_failed" };
+    return { ok: false, error: error.name || "fetch_failed", data: null };
   } finally {
     clearTimeout(timer);
   }
+}
+
+let rdapBootstrapCache = { expiresAt: 0, data: null };
+
+async function getRdapBootstrap() {
+  if (rdapBootstrapCache.data && rdapBootstrapCache.expiresAt > Date.now()) {
+    return rdapBootstrapCache.data;
+  }
+
+  const result = await fetchJsonWithTimeout(
+    "https://data.iana.org/rdap/dns.json",
+    4500,
+    { Accept: "application/json", "User-Agent": "SafeDeal/1.0" }
+  );
+
+  if (!result.ok || !Array.isArray(result.data?.services)) return null;
+  rdapBootstrapCache = {
+    data: result.data,
+    expiresAt: Date.now() + 24 * 60 * 60 * 1000
+  };
+  return result.data;
+}
+
+async function getRegistryRdapBase(hostname) {
+  const labels = String(hostname).toLowerCase().split(".").filter(Boolean);
+  const tld = labels.at(-1);
+  if (!tld) return null;
+
+  const bootstrap = await getRdapBootstrap();
+  if (!bootstrap) return null;
+
+  for (const service of bootstrap.services || []) {
+    const zones = Array.isArray(service?.[0]) ? service[0].map((x) => String(x).toLowerCase()) : [];
+    const bases = Array.isArray(service?.[1]) ? service[1] : [];
+    if (zones.includes(tld) && bases.length) return String(bases[0]);
+  }
+  return null;
+}
+
+function rdapResultFromData(data, source) {
+  const registrationDate = parseRdapRegistrationDate(data);
+  return {
+    ok: true,
+    source,
+    registrationDate: registrationDate ? registrationDate.toISOString() : null,
+    ageDays: registrationDate
+      ? Math.max(0, Math.floor((Date.now() - registrationDate.getTime()) / 86400000))
+      : null
+  };
+}
+
+async function lookupRdap(hostname) {
+  // Fast public proxy first.
+  const publicResult = await fetchJsonWithTimeout(
+    `https://rdap.org/domain/${encodeURIComponent(hostname)}`,
+    4500,
+    { Accept: "application/rdap+json, application/json", "User-Agent": "SafeDeal/1.0" }
+  );
+
+  if (publicResult.ok) {
+    const parsed = rdapResultFromData(publicResult.data, "rdap.org");
+    if (Number.isFinite(parsed.ageDays)) return parsed;
+  }
+
+  // Fallback to the authoritative registry selected from IANA's RDAP bootstrap.
+  const base = await getRegistryRdapBase(hostname);
+  if (base) {
+    const registryUrl = `${base.replace(/\/?$/, "/")}domain/${encodeURIComponent(hostname)}`;
+    const registryResult = await fetchJsonWithTimeout(
+      registryUrl,
+      5000,
+      { Accept: "application/rdap+json, application/json", "User-Agent": "SafeDeal/1.0" }
+    );
+    if (registryResult.ok) return rdapResultFromData(registryResult.data, "registry");
+  }
+
+  return {
+    ok: Boolean(publicResult.ok),
+    source: publicResult.ok ? "rdap.org" : null,
+    registrationDate: null,
+    ageDays: null,
+    status: publicResult.status || null,
+    error: publicResult.error || "rdap_failed"
+  };
+}
+
+function cleanHeaderValue(value = "") {
+  return String(value).replace(/[\r\n]/g, " ").slice(0, 500);
+}
+
+async function resolvePublicAddress(hostname) {
+  const result = await lookupDomain(hostname);
+  if (!result.ok || !result.addresses.length) {
+    return { ok: false, error: result.error || "dns_lookup_failed", addresses: [] };
+  }
+  if (result.hasPrivateAddress) {
+    return { ok: false, error: "private_address", addresses: result.addresses };
+  }
+  const address = result.addresses.find((ip) => net.isIPv4(ip)) || result.addresses[0];
+  if (!address || isPrivateOrReservedIp(address)) {
+    return { ok: false, error: "no_public_address", addresses: result.addresses };
+  }
+  return { ok: true, address, family: net.isIPv6(address) ? 6 : 4, addresses: result.addresses };
+}
+
+function requestPublicUrlOnce(url, { timeoutMs = 6500, maxBytes = 280000 } = {}) {
+  return new Promise(async (resolve) => {
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return resolve({ ok: false, error: "invalid_url" });
+    }
+
+    if (!["http:", "https:"].includes(parsed.protocol)) {
+      return resolve({ ok: false, error: "unsupported_protocol" });
+    }
+
+    const hostname = parsed.hostname.toLowerCase().replace(/\.$/, "");
+    const target = await resolvePublicAddress(hostname);
+    if (!target.ok) return resolve({ ok: false, error: target.error, hostname });
+
+    const isHttps = parsed.protocol === "https:";
+    const client = isHttps ? https : http;
+    const port = parsed.port ? Number(parsed.port) : (isHttps ? 443 : 80);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      return resolve({ ok: false, error: "invalid_port", hostname });
+    }
+
+    const options = {
+      protocol: parsed.protocol,
+      hostname: target.address,
+      family: target.family,
+      port,
+      method: "GET",
+      path: `${parsed.pathname || "/"}${parsed.search || ""}`,
+      headers: {
+        Host: parsed.host,
+        "User-Agent": "SafeDeal-Security-Scanner/1.0",
+        Accept: "text/html,application/xhtml+xml,text/plain;q=0.8,*/*;q=0.2",
+        "Accept-Encoding": "identity",
+        Connection: "close"
+      },
+      agent: false
+    };
+
+    if (isHttps) {
+      options.servername = hostname;
+      // This scanner sends no credentials or cookies. We allow the handshake so
+      // we can inspect sites with broken certificates, and report that separately.
+      options.rejectUnauthorized = false;
+    }
+
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+
+    const req = client.request(options, (res) => {
+      const chunks = [];
+      let total = 0;
+      let truncated = false;
+
+      res.on("data", (chunk) => {
+        if (truncated) return;
+        total += chunk.length;
+        if (total > maxBytes) {
+          truncated = true;
+          const allowed = Math.max(0, maxBytes - (total - chunk.length));
+          if (allowed) chunks.push(chunk.subarray(0, allowed));
+          res.destroy();
+          return;
+        }
+        chunks.push(chunk);
+      });
+
+      const done = () => {
+        const socket = res.socket;
+        let peer = null;
+        let certHostError = null;
+        if (isHttps && socket?.getPeerCertificate) {
+          try {
+            peer = socket.getPeerCertificate(true);
+            if (peer && Object.keys(peer).length) {
+              const err = tls.checkServerIdentity(hostname, peer);
+              certHostError = err ? err.message : null;
+            }
+          } catch (error) {
+            certHostError = error.message || "certificate_check_failed";
+          }
+        }
+
+        finish({
+          ok: true,
+          status: Number(res.statusCode || 0),
+          headers: res.headers || {},
+          body: Buffer.concat(chunks).toString("utf8"),
+          truncated,
+          hostname,
+          address: target.address,
+          protocol: parsed.protocol,
+          tls: isHttps ? {
+            authorized: Boolean(socket?.authorized) && !certHostError,
+            authorizationError: socket?.authorizationError || certHostError || null,
+            validFrom: peer?.valid_from || null,
+            validTo: peer?.valid_to || null,
+            issuer: peer?.issuer?.O || peer?.issuer?.CN || null,
+            subject: peer?.subject?.CN || null,
+            protocol: socket?.getProtocol?.() || null
+          } : null
+        });
+      };
+
+      res.on("end", done);
+      res.on("close", done);
+    });
+
+    req.setTimeout(timeoutMs, () => req.destroy(new Error("timeout")));
+    req.on("error", (error) => finish({ ok: false, error: error.message || "request_failed", hostname }));
+    req.end();
+  });
+}
+
+function analyzeHtmlPage(html = "", pageUrl = "") {
+  const text = String(html).slice(0, 280000);
+  const lower = text.toLowerCase();
+  const hasForm = /<form\b/i.test(text);
+  const loginForm = /type\s*=\s*["']?password\b/i.test(text) || /autocomplete\s*=\s*["'](?:current-password|new-password)/i.test(text);
+  const paymentForm = /(autocomplete\s*=\s*["'](?:cc-number|cc-csc|cc-exp)|name\s*=\s*["'][^"']*(?:card.?number|cvv|cvc|card.?expiry|expir)|id\s*=\s*["'][^"']*(?:card.?number|cvv|cvc))/i.test(text);
+  const otpField = /(autocomplete\s*=\s*["']one-time-code|name\s*=\s*["'][^"']*(?:otp|sms.?code|verification.?code))/i.test(text);
+  const walletSecretRequest = /(seed phrase|recovery phrase|secret phrase|private key|mnemonic phrase)/i.test(lower);
+  const executableDownload = /href\s*=\s*["'][^"']+\.(?:apk|exe|msi|scr|bat|cmd)(?:[?#"'])/i.test(text);
+
+  let externalFormAction = false;
+  let pageHostname = "";
+  try { pageHostname = new URL(pageUrl).hostname.toLowerCase(); } catch {}
+
+  if (hasForm && pageHostname) {
+    const actionRegex = /<form\b[^>]*\baction\s*=\s*["']([^"']+)["']/gi;
+    for (const match of text.matchAll(actionRegex)) {
+      try {
+        const action = new URL(match[1], pageUrl);
+        if (["http:", "https:"].includes(action.protocol) && action.hostname.toLowerCase() !== pageHostname) {
+          externalFormAction = true;
+          break;
+        }
+      } catch {}
+    }
+  }
+
+  const titleMatch = text.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const title = titleMatch ? compactSpaces(titleMatch[1].replace(/<[^>]+>/g, " ")).slice(0, 120) : "";
+
+  return {
+    hasForm,
+    loginForm,
+    paymentForm,
+    otpField,
+    walletSecretRequest,
+    executableDownload,
+    externalFormAction,
+    title
+  };
+}
+
+async function inspectRemotePage(rawUrl) {
+  let current;
+  try { current = new URL(rawUrl); } catch { return { ok: false, error: "invalid_url" }; }
+
+  const initialProtocol = current.protocol;
+  const initialHostname = current.hostname.toLowerCase();
+  const chain = [];
+  let last = null;
+
+  for (let i = 0; i <= 3; i++) {
+    const one = await requestPublicUrlOnce(current.href);
+    if (!one.ok) {
+      return {
+        ok: false,
+        error: one.error || "page_request_failed",
+        redirects: chain.length,
+        finalUrl: current.href,
+        finalHostname: current.hostname.toLowerCase(),
+        chain
+      };
+    }
+
+    last = one;
+    chain.push({
+      status: one.status,
+      hostname: current.hostname.toLowerCase(),
+      protocol: current.protocol.replace(":", "")
+    });
+
+    const location = cleanHeaderValue(one.headers?.location || "");
+    if ([301, 302, 303, 307, 308].includes(one.status) && location && i < 3) {
+      let next;
+      try { next = new URL(location, current); } catch { break; }
+      if (!["http:", "https:"].includes(next.protocol)) break;
+      current = next;
+      continue;
+    }
+    break;
+  }
+
+  if (!last) return { ok: false, error: "page_request_failed" };
+
+  const contentType = String(last.headers?.["content-type"] || "").toLowerCase();
+  const canInspectBody = !contentType || contentType.includes("html") || contentType.includes("text/");
+  const page = canInspectBody ? analyzeHtmlPage(last.body || "", current.href) : {
+    hasForm: false,
+    loginForm: false,
+    paymentForm: false,
+    otpField: false,
+    walletSecretRequest: false,
+    executableDownload: false,
+    externalFormAction: false,
+    title: ""
+  };
+
+  const finalHostname = current.hostname.toLowerCase();
+  const finalProtocol = current.protocol;
+  return {
+    ok: true,
+    status: last.status,
+    redirects: Math.max(0, chain.length - 1),
+    chain,
+    finalUrl: current.href,
+    finalHostname,
+    finalProtocol: finalProtocol.replace(":", ""),
+    crossHostRedirect: finalHostname !== initialHostname,
+    httpsDowngrade: initialProtocol === "https:" && finalProtocol === "http:",
+    contentType: contentType.slice(0, 120),
+    truncated: Boolean(last.truncated),
+    tls: last.tls,
+    ...page
+  };
 }
 
 async function checkGoogleWebRisk(url) {
@@ -564,12 +894,13 @@ async function inspectUrl(rawUrl) {
     };
   }
 
-  const [rdap, webRisk, phishTank, phishDestroy, urlHaus] = await Promise.all([
+  const [rdap, webRisk, phishTank, phishDestroy, urlHaus, remotePage] = await Promise.all([
     lookupRdap(hostname),
     checkGoogleWebRisk(rawUrl),
     checkPhishTank(rawUrl),
     checkPhishDestroy(hostname),
-    checkUrlHaus(rawUrl, hostname)
+    checkUrlHaus(rawUrl, hostname),
+    inspectRemotePage(rawUrl)
   ]);
 
   const reasons = [];
@@ -690,6 +1021,74 @@ async function inspectUrl(rawUrl) {
     facts.push("URLhaus не знайшов точного URL або відомих malware-URL на цьому хості");
   }
 
+  if (remotePage.ok) {
+    facts.push(`Сторінка відповіла HTTP ${remotePage.status || "—"}`);
+
+    if (remotePage.redirects > 0) {
+      facts.push(`Редиректів: ${remotePage.redirects}; кінцевий домен: ${remotePage.finalHostname}`);
+    }
+
+    if (remotePage.httpsDowngrade) {
+      points += 24;
+      reasons.push("HTTPS-посилання перенаправляє на незахищений HTTP");
+    }
+
+    if (remotePage.tls) {
+      if (remotePage.tls.authorized) {
+        const validTo = remotePage.tls.validTo ? new Date(remotePage.tls.validTo) : null;
+        if (validTo && !Number.isNaN(validTo.getTime())) {
+          facts.push(`TLS-сертифікат дійсний до ${validTo.toISOString().slice(0, 10)}`);
+        } else {
+          facts.push("TLS-сертифікат пройшов перевірку");
+        }
+      } else {
+        points += 22;
+        reasons.push("TLS-сертифікат сторінки не пройшов перевірку");
+      }
+    }
+
+    if (remotePage.loginForm) facts.push("На сторінці знайдена форма входу з паролем");
+    if (remotePage.paymentForm) facts.push("На сторінці знайдені поля платіжної картки");
+    if (remotePage.otpField) facts.push("На сторінці знайдено поле одноразового коду / OTP");
+
+    if (remotePage.loginForm && remotePage.finalProtocol === "http") {
+      points += 38;
+      reasons.push("Сторінка просить пароль через незахищене HTTP-з’єднання");
+    }
+
+    if (remotePage.paymentForm && remotePage.finalProtocol === "http") {
+      points += 45;
+      reasons.push("Платіжна форма працює через незахищене HTTP-з’єднання");
+    }
+
+    if (remotePage.externalFormAction) {
+      points += 10;
+      reasons.push("Форма на сторінці надсилає дані на інший домен — перевірте адресу отримувача");
+    }
+
+    if (remotePage.walletSecretRequest) {
+      points += 50;
+      reasons.push("Сторінка містить запит на seed/recovery phrase або приватний ключ криптогаманця");
+    }
+
+    if (remotePage.executableDownload) {
+      points += 12;
+      reasons.push("На сторінці знайдено посилання на виконуваний файл (APK/EXE/MSI тощо)");
+    }
+
+    if (remotePage.loginForm && Number.isFinite(rdap.ageDays) && rdap.ageDays <= 30) {
+      points += 18;
+      reasons.push("Форма входу розміщена на дуже новому домені");
+    }
+
+    if (remotePage.paymentForm && Number.isFinite(rdap.ageDays) && rdap.ageDays <= 30) {
+      points += 22;
+      reasons.push("Платіжна форма розміщена на дуже новому домені");
+    }
+  } else {
+    facts.push("Безпечний скан сторінки/редиректів тимчасово не вдалося виконати");
+  }
+
   const suspiciousHostTokens = [
     "secure-login",
     "verify-account",
@@ -750,7 +1149,28 @@ async function inspectUrl(rawUrl) {
       urlHausUrlStatus: urlHaus.urlStatus || null,
       urlHausThreat: urlHaus.threat || null,
       urlHausHostMatch: Boolean(urlHaus.hostMatch),
-      urlHausHostUrlCount: Number(urlHaus.hostUrlCount || 0)
+      urlHausHostUrlCount: Number(urlHaus.hostUrlCount || 0),
+      rdapSource: rdap.source || null,
+      pageScanOk: Boolean(remotePage.ok),
+      pageStatus: remotePage.status || null,
+      redirectCount: Number(remotePage.redirects || 0),
+      finalHostname: remotePage.finalHostname || hostname,
+      finalProtocol: remotePage.finalProtocol || parsed.protocol.replace(":", ""),
+      crossHostRedirect: Boolean(remotePage.crossHostRedirect),
+      httpsDowngrade: Boolean(remotePage.httpsDowngrade),
+      tlsPresent: Boolean(remotePage.tls),
+      tlsAuthorized: remotePage.tls ? Boolean(remotePage.tls.authorized) : null,
+      tlsValidTo: remotePage.tls?.validTo || null,
+      tlsIssuer: remotePage.tls?.issuer || null,
+      tlsProtocol: remotePage.tls?.protocol || null,
+      pageHasForm: Boolean(remotePage.hasForm),
+      loginForm: Boolean(remotePage.loginForm),
+      paymentForm: Boolean(remotePage.paymentForm),
+      otpField: Boolean(remotePage.otpField),
+      externalFormAction: Boolean(remotePage.externalFormAction),
+      walletSecretRequest: Boolean(remotePage.walletSecretRequest),
+      executableDownload: Boolean(remotePage.executableDownload),
+      pageTitle: remotePage.title || null
     }
   };
 }

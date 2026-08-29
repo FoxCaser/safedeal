@@ -198,6 +198,26 @@ $("#runCheck").addEventListener("click", async () => {
                   ? `На хості є malware URL (${t.urlHausHostUrlCount || 1})`
                   : "Збігів немає";
 
+      const sslText =
+        t.finalProtocol !== "https"
+          ? "Немає HTTPS"
+          : t.tlsPresent === false
+            ? "Не перевірено"
+            : t.tlsAuthorized
+              ? (t.tlsValidTo ? `Дійсний до ${new Date(t.tlsValidTo).toLocaleDateString("uk-UA")}` : "Дійсний")
+              : "Проблема сертифіката";
+
+      const redirectText =
+        t.pageScanOk
+          ? (t.redirectCount > 0 ? `${t.redirectCount} → ${t.finalHostname || "—"}` : "Немає")
+          : "Не перевірено";
+
+      const forms = [];
+      if (t.loginForm) forms.push("вхід");
+      if (t.paymentForm) forms.push("оплата");
+      if (t.otpField) forms.push("OTP");
+      const formsText = t.pageScanOk ? (forms.length ? forms.join(", ") : "Чутливих форм не знайдено") : "Не перевірено";
+
       techGrid.innerHTML = `
         <div class="tech-item"><span>🌐 Домен</span><b>${escapeHtml(t.hostname || "—")}</b></div>
         <div class="tech-item"><span>🔒 Протокол</span><b>${escapeHtml(String(t.protocol || "—").toUpperCase())}</b></div>
@@ -207,6 +227,10 @@ $("#runCheck").addEventListener("click", async () => {
         <div class="tech-item"><span>🎣 PhishTank</span><b>${escapeHtml(phishTankText)}</b></div>
         <div class="tech-item"><span>🧨 PhishDestroy</span><b>${escapeHtml(phishDestroyText)}</b></div>
         <div class="tech-item"><span>🦠 URLhaus</span><b>${escapeHtml(urlHausText)}</b></div>
+        <div class="tech-item"><span>🔐 SSL/TLS</span><b>${escapeHtml(sslText)}</b></div>
+        <div class="tech-item"><span>↪️ Редиректи</span><b>${escapeHtml(redirectText)}</b></div>
+        <div class="tech-item"><span>🧾 Форми</span><b>${escapeHtml(formsText)}</b></div>
+        <div class="tech-item"><span>📡 HTTP-статус</span><b>${escapeHtml(t.pageScanOk && t.pageStatus ? String(t.pageStatus) : "Не перевірено")}</b></div>
       `;
 
       factsList.innerHTML = (r.facts || [])
