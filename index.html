@@ -7,7 +7,7 @@
   <title>SafeDeal — перевіряй перед дією</title>
   <meta name="description" content="SafeDeal перевіряє продавців, вакансії, посилання, Telegram, Facebook, Instagram, WhatsApp, Viber, OLX, номери телефону та підозрілі повідомлення за доступними сигналами ризику.">
   <meta name="referrer" content="strict-origin-when-cross-origin">
-  <link rel="stylesheet" href="/style.css?v=8.0">
+  <link rel="stylesheet" href="/style.css?v=8.1">
 </head>
 <body>
   <div class="app-shell">
@@ -62,29 +62,24 @@
       </header>
 
       <section class="page active" id="home">
-        <section class="v8-hero">
-          <div class="v8-hero-copy">
-            <span class="v8-live-pill"><i></i> SAFEDEAL SECURITY</span>
-            <h2>Перевір перед тим,<br><em>як довіряти.</em></h2>
-            <p>Одна перевірка об’єднує сигнали з посилань, номерів, соцмереж, месенджерів, скарг і підозрілих пропозицій.</p>
-            <div class="v8-hero-actions">
-              <button class="primary" type="button" data-focus-check>Почати перевірку</button>
-              <button class="v8-secondary" type="button" data-page="reports">База скарг</button>
+        <section class="v81-hero">
+          <div class="v81-brandline">
+            <div>
+              <span class="v81-kicker">SAFEDEAL SECURITY</span>
+              <h2>Перевіряємо.<br><em>Захищаємо.</em></h2>
+              <p>Перевіряй продавця, номер, посилання або акаунт до оплати.</p>
+              <div class="v81-actions">
+                <button class="primary" type="button" data-focus-check>⚡ Швидка перевірка</button>
+                <button class="v81-secondary" type="button" data-page="reports">⚑ База скарг</button>
+              </div>
             </div>
-            <div class="v8-proof">
-              <span><b>0–100</b> оцінка ризику</span>
-              <span><b>11</b> режимів перевірки</span>
-              <span><b>24/7</b> доступ до сервісу</span>
-            </div>
+            <div class="v81-shield" aria-hidden="true">✓</div>
           </div>
-          <div class="v8-preview" aria-hidden="true">
-            <div class="v8-preview-top"><span>Результат</span><b>SD-84721</b></div>
-            <div class="v8-risk-ring"><strong>74</strong><small>/100</small></div>
-            <div class="v8-risk-label">ВИСОКИЙ РИЗИК</div>
-            <div class="v8-mini-signal">⚠ Є підтверджені скарги</div>
-            <div class="v8-mini-signal">⚠ Підозріла пропозиція</div>
-            <div class="v8-mini-signal ok">✓ Офіційний домен платформи</div>
-            <div class="v8-platform-row"><span>TG</span><span>f</span><span>◎</span><span>WA</span><span>V</span><span>OLX</span></div>
+
+          <div class="v81-stats">
+            <div><b>0–100</b><span>оцінка ризику</span></div>
+            <div><b>11</b><span>режимів перевірки</span></div>
+            <div><b>24/7</b><span>доступ до сервісу</span></div>
           </div>
         </section>
 
@@ -144,6 +139,7 @@
           <button class="primary full sd-main-check" id="runCheck"><span>⌕</span> Перевірити</button>
         </article>
 
+        <div class="v81-result-title">ПРИКЛАД / РЕЗУЛЬТАТ ПЕРЕВІРКИ</div>
         <section class="result-card hidden" id="resultCard">
           <div class="result-top">
             <div>
@@ -383,6 +379,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js" defer></script>
-  <script src="/app.js?v=8.0" defer></script>
+  <script src="/app.js?v=8.1" defer></script>
 </body>
 </html>
