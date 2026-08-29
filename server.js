@@ -42,7 +42,7 @@ app.use(express.json({ limit: "768kb", type: ["application/json", "application/*
 app.use(express.urlencoded({ extended: false, limit: "256kb" }));
 app.use(morgan("tiny"));
 
-const ALLOWED_TYPES = new Set(["seller", "job", "link", "contact", "phone", "text"]);
+const ALLOWED_TYPES = new Set(["seller", "job", "link", "contact", "phone", "text", "facebook", "instagram", "whatsapp", "viber", "olx"]);
 
 const demoApprovedReports = [
   {
@@ -430,6 +430,31 @@ function normalizeTargetKey(value = "") {
   const usernameMatch = raw.match(/^@([a-z0-9_]{4,})$/i);
   if (usernameMatch) return `@${usernameMatch[1].toLowerCase()}`;
 
+
+  try {
+    const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+    const parsed = new URL(withProtocol);
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
+    const path = decodeURIComponent(parsed.pathname || "/").replace(/\/+/g, "/").replace(/\/$/, "");
+
+    if (host === "instagram.com" && /^\/[a-z0-9._]{2,30}$/i.test(path)) {
+      return `instagram:${path.toLowerCase()}`;
+    }
+    if ((host === "facebook.com" || host === "m.facebook.com" || host === "fb.com") && path.length > 1) {
+      return `facebook:${path.toLowerCase().slice(0, 170)}`;
+    }
+    if ((host === "wa.me" || host === "api.whatsapp.com" || host === "whatsapp.com")) {
+      const digits = `${path} ${parsed.searchParams.get("phone") || ""}`.replace(/\D/g, "");
+      if (digits.length >= 8) return digits;
+    }
+    if ((host === "invite.viber.com" || host === "viber.com" || host === "vb.me") && path.length > 1) {
+      return `viber:${host}${path}`.slice(0, 220);
+    }
+    if (host.startsWith("olx.") && path.length > 1) {
+      return `olx:${host}${path}`.slice(0, 220);
+    }
+  } catch {}
+
   try {
     const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
     const parsed = new URL(withProtocol);
@@ -784,7 +809,7 @@ function scoreToLevel(score) {
 }
 
 
-function buildHumanVerdict({ score, type, telegram, phone, phoneModeratedMatches = 0, sellerModeratedMatches = 0, sellerExactPhoneMatches = 0, moderatedMatchesCount = 0 }) {
+function buildHumanVerdict({ score, type, telegram, phone, phoneModeratedMatches = 0, sellerModeratedMatches = 0, sellerExactPhoneMatches = 0, moderatedMatchesCount = 0, platform = null }) {
   const telegramLimited =
     type === "contact" &&
     telegram &&
@@ -793,6 +818,13 @@ function buildHumanVerdict({ score, type, telegram, phone, phoneModeratedMatches
     !telegram.publicPostsOk;
 
   const privateInviteLimited = type === "contact" && telegram?.kind === "invite";
+
+  const platformLimited =
+    PLATFORM_CHECKS[type] &&
+    platform &&
+    (!platform.ok || (platform.limited && moderatedMatchesCount === 0));
+
+
 
   if (type === "phone" && !phone?.valid) {
     return {
@@ -839,6 +871,16 @@ function buildHumanVerdict({ score, type, telegram, phone, phoneModeratedMatches
       title: "Є підтверджені попередження у базі SafeDeal",
       text: `Знайдено модерованих збігів: ${moderatedMatchesCount}. Це не є доказом шахрайства, але перед оплатою або передачею даних потрібна додаткова перевірка.`,
       evidence: `Модерованих збігів: ${moderatedMatchesCount}`
+    };
+  }
+
+
+  if (platformLimited && score < 26) {
+    return {
+      kind: "limited",
+      title: "Недостатньо публічних даних",
+      text: `SafeDeal перевірив доступні сигнали ${platform?.label || "платформи"} та базу скарг, але цих даних недостатньо, щоб назвати профіль безпечним.`,
+      evidence: moderatedMatchesCount > 0 ? `Збігів у базі: ${moderatedMatchesCount}` : "Точних підтверджених збігів не знайдено"
     };
   }
 
@@ -2675,6 +2717,7 @@ async function findCommunityMatches(input) {
   const url = extractFirstUrl(input);
   if (url) {
     try {
+      candidates.add(normalizeTargetKey(url));
       candidates.add(new URL(url).hostname.toLowerCase().replace(/^www\./, ""));
     } catch {}
   }
@@ -2704,6 +2747,172 @@ async function findCommunityMatches(input) {
   return matches;
 }
 
+
+const PLATFORM_CHECKS = {
+  facebook: {
+    label: "Facebook",
+    domains: ["facebook.com", "m.facebook.com", "fb.com", "fb.me"]
+  },
+  instagram: {
+    label: "Instagram",
+    domains: ["instagram.com"]
+  },
+  whatsapp: {
+    label: "WhatsApp",
+    domains: ["wa.me", "whatsapp.com", "api.whatsapp.com"]
+  },
+  viber: {
+    label: "Viber",
+    domains: ["viber.com", "invite.viber.com", "vb.me"]
+  },
+  olx: {
+    label: "OLX",
+    domains: ["olx.ua", "olx.pl", "olx.ro", "olx.bg", "olx.kz", "olx.uz", "olx.com"]
+  }
+};
+
+function normalizedHostFromInput(input = "") {
+  const url = extractFirstUrl(input);
+  if (!url) return null;
+  try {
+    return new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return null;
+  }
+}
+
+function hostMatchesPlatform(host, domains = []) {
+  if (!host) return false;
+  return domains.some((domain) => host === domain || host.endsWith(`.${domain}`));
+}
+
+function extractPlatformProfileKey(type, input = "") {
+  const cfg = PLATFORM_CHECKS[type];
+  if (!cfg) return null;
+
+  const url = extractFirstUrl(input);
+  if (url) {
+    try {
+      const parsed = new URL(url);
+      const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
+      if (!hostMatchesPlatform(host, cfg.domains)) {
+        return {
+          ok: false,
+          label: cfg.label,
+          normalized: url,
+          host,
+          reason: `Посилання не використовує офіційний домен ${cfg.label}`
+        };
+      }
+
+      let path = decodeURIComponent(parsed.pathname || "/").replace(/\/+/g, "/");
+      if (path.length > 180) path = path.slice(0, 180);
+
+      if (type === "whatsapp") {
+        const phoneDigits = `${path} ${parsed.searchParams.get("phone") || ""}`.replace(/\D/g, "");
+        if (phoneDigits.length >= 8) {
+          return { ok: true, label: cfg.label, normalized: `+${phoneDigits}`, host, publicUrl: url, phoneDigits };
+        }
+      }
+
+      return {
+        ok: true,
+        label: cfg.label,
+        normalized: `${host}${path}`.replace(/\/$/, ""),
+        host,
+        publicUrl: url
+      };
+    } catch {}
+  }
+
+  if (type === "instagram") {
+    const handle = compactSpaces(input).match(/^@?([A-Za-z0-9._]{2,30})$/);
+    if (handle) {
+      return {
+        ok: true,
+        limited: true,
+        label: cfg.label,
+        normalized: `@${handle[1].toLowerCase()}`,
+        publicUrl: `https://www.instagram.com/${encodeURIComponent(handle[1])}/`
+      };
+    }
+  }
+
+  if (type === "facebook") {
+    const handle = compactSpaces(input).match(/^@?([A-Za-z0-9.]{3,80})$/);
+    if (handle) {
+      return {
+        ok: true,
+        limited: true,
+        label: cfg.label,
+        normalized: handle[1].toLowerCase(),
+        publicUrl: `https://www.facebook.com/${encodeURIComponent(handle[1])}`
+      };
+    }
+  }
+
+  if (type === "whatsapp" || type === "viber") {
+    const phone = extractPhoneTarget(input);
+    if (phone?.valid) {
+      return {
+        ok: true,
+        limited: true,
+        label: cfg.label,
+        normalized: phone.normalized,
+        phoneDigits: phone.digits
+      };
+    }
+  }
+
+  return {
+    ok: false,
+    limited: true,
+    label: cfg.label,
+    normalized: compactSpaces(input).slice(0, 180),
+    reason: `Не вдалося розпізнати коректні дані ${cfg.label}`
+  };
+}
+
+function analyzeReviewEvidence(input = "") {
+  const text = compactSpaces(input);
+  const reasons = [];
+  const facts = [];
+  let points = 0;
+
+  if (!/відгук|review|оцінк|rating|зір/i.test(text)) {
+    return { points, reasons, facts, suspicious: false };
+  }
+
+  const repetitive = /(чудов(ий|а|о).{0,40})\1|(?:рекомендую.{0,35}){3,}|(?:все супер.{0,35}){3,}/i.test(text);
+  if (repetitive) {
+    points += 8;
+    reasons.push("У наданих відгуках є ознаки повторюваних або шаблонних формулювань");
+  }
+
+  const positiveBurst =
+    /(?:10|20|30|50|100)\+?\s*(?:позитивн|5[\s-]*зір).{0,80}(?:день|годин|тижд)/i.test(text) ||
+    /(?:за день|за добу|за кілька годин).{0,60}(?:відгук|оцінок).{0,40}(?:10|20|30|50|100)/i.test(text);
+  if (positiveBurst) {
+    points += 10;
+    reasons.push("Опис вказує на незвично швидкий сплеск позитивних відгуків");
+  }
+
+  const hiddenEvidence =
+    /видален(і|о|ий)\s+негативн|прихован(і|о)\s+відгук|відгук.*зник|негативн.*зник/i.test(text);
+  if (hiddenEvidence) {
+    points += 10;
+    reasons.push("Є надані ознаки, що частина негативних відгуків могла бути прихована або видалена");
+    facts.push("Це обережний сигнал на основі наданих даних, а не підтвердження факту видалення відгуків платформою.");
+  }
+
+  if (!reasons.length) {
+    facts.push("У тексті згадуються відгуки, але недостатньо даних, щоб робити висновок про їхню достовірність або видалення.");
+  }
+
+  return { points, reasons, facts, suspicious: reasons.length > 0 };
+}
+
+
 async function analyzeInput(type, input) {
   const safeType = ALLOWED_TYPES.has(type) ? type : "seller";
   const textAnalysis = analyzeTextSignals(safeType, input);
@@ -2727,6 +2936,52 @@ async function analyzeInput(type, input) {
     }
   }
 
+
+  let platform = null;
+  if (PLATFORM_CHECKS[safeType]) {
+    platform = extractPlatformProfileKey(safeType, input);
+    const cfg = PLATFORM_CHECKS[safeType];
+
+    if (!platform?.ok) {
+      score += 5;
+      reasons.push(platform?.reason || `Не вдалося розпізнати дані ${cfg.label}`);
+      actions.add(`Вставте повне офіційне посилання ${cfg.label}${safeType === "whatsapp" || safeType === "viber" ? " або номер телефону" : ""}.`);
+    } else {
+      facts.push(`${cfg.label}: ${platform.normalized}`);
+      facts.push(`Офіційний домен або формат ${cfg.label} сам по собі не підтверджує надійність конкретного профілю, продавця чи співрозмовника.`);
+
+      if (platform.publicUrl) {
+        const pUrl = await inspectUrl(platform.publicUrl);
+        if (pUrl.ok) {
+          score += pUrl.points;
+          reasons.push(...pUrl.reasons);
+          facts.push(...pUrl.facts);
+          technical = pUrl.technical;
+        } else {
+          reasons.push(...pUrl.reasons);
+          technical = pUrl.technical;
+        }
+      } else {
+        facts.push(`SafeDeal не має прямого доступу до приватних даних ${cfg.label}; перевіряються лише введені дані, доступні публічні сигнали та база скарг.`);
+      }
+
+      if (platform.phoneDigits) {
+        const p = extractPhoneTarget(platform.normalized);
+        if (p?.valid) {
+          facts.push(`Пов’язаний номер: ${p.normalized}`);
+        }
+      }
+    }
+  }
+
+  const reviewEvidence = safeType === "seller" || safeType === "olx"
+    ? analyzeReviewEvidence(input)
+    : { points: 0, reasons: [], facts: [], suspicious: false };
+
+  if (reviewEvidence.points) score += reviewEvidence.points;
+  reasons.push(...reviewEvidence.reasons);
+  facts.push(...reviewEvidence.facts);
+
   const telegramTarget = extractTelegramTarget(input, safeType === "contact");
   const telegram = telegramTarget ? await inspectTelegramPublic(telegramTarget) : null;
   if (telegramTarget) {
@@ -2743,7 +2998,7 @@ async function analyzeInput(type, input) {
 
   const detectedUrl = extractFirstUrl(input);
 
-  if (detectedUrl) {
+  if (detectedUrl && !PLATFORM_CHECKS[safeType]) {
     const urlAnalysis = await inspectUrl(detectedUrl);
 
     if (urlAnalysis.ok) {
@@ -2797,7 +3052,8 @@ async function analyzeInput(type, input) {
     phoneModeratedMatches: safeType === "phone" ? exactPhoneModeratedMatches.length : 0,
     sellerModeratedMatches: safeType === "seller" ? moderatedMatches.length : 0,
     sellerExactPhoneMatches: safeType === "seller" ? exactPhoneModeratedMatches.length : 0,
-    moderatedMatchesCount: moderatedMatches.length
+    moderatedMatchesCount: moderatedMatches.length,
+    platform
   });
 
   if (!reasons.length) {
@@ -2834,6 +3090,19 @@ async function analyzeInput(type, input) {
       normalized: phone.normalized,
       country: phone.country,
       exactModeratedMatches: exactPhoneModeratedMatches.length
+    } : null,
+    platform: platform ? {
+      type: safeType,
+      label: platform.label,
+      normalized: platform.normalized,
+      publicUrl: platform.publicUrl || null,
+      host: platform.host || null,
+      limited: Boolean(platform.limited),
+      ok: Boolean(platform.ok)
+    } : null,
+    reviewEvidence: reviewEvidence?.suspicious ? {
+      suspicious: true,
+      reasons: reviewEvidence.reasons
     } : null,
     communityMatches: communityMatches.length,
     disclaimer:

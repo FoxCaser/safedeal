@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#07111f">
   <title>SafeDeal — перевіряй перед дією</title>
-  <meta name="description" content="SafeDeal перевіряє продавців, вакансії, посилання, Telegram, номери телефону та підозрілі повідомлення за доступними сигналами ризику.">
+  <meta name="description" content="SafeDeal перевіряє продавців, вакансії, посилання, Telegram, Facebook, Instagram, WhatsApp, Viber, OLX, номери телефону та підозрілі повідомлення за доступними сигналами ризику.">
   <meta name="referrer" content="strict-origin-when-cross-origin">
-  <link rel="stylesheet" href="/style.css?v=7.2">
+  <link rel="stylesheet" href="/style.css?v=8.0">
 </head>
 <body>
   <div class="app-shell">
@@ -22,13 +22,21 @@
 
       <nav class="nav">
         <button class="nav-btn active" data-page="home">⌂ <span>Головна</span></button>
-        <button class="nav-btn" data-check="seller">♙ <span>Перевірка продавця</span></button>
-        <button class="nav-btn" data-check="job">▣ <span>Перевірка вакансії</span></button>
-        <button class="nav-btn" data-check="link">🔗 <span>Перевірка посилання</span></button>
-        <button class="nav-btn" data-check="contact">✈ <span>Telegram</span></button>
+        <div class="nav-group-label">ОСНОВНІ ПЕРЕВІРКИ</div>
+        <button class="nav-btn" data-check="seller">♙ <span>Продавець / угода</span></button>
         <button class="nav-btn" data-check="phone">☎ <span>Номер телефону</span></button>
+        <button class="nav-btn" data-check="link">↗ <span>Посилання</span></button>
         <button class="nav-btn" data-check="text">▤ <span>Текст / скрін</span></button>
-                <button class="nav-btn" data-page="reports">⚑ <span>База скарг</span></button>
+        <div class="nav-group-label">ПЛАТФОРМИ</div>
+        <button class="nav-btn" data-check="contact">➤ <span>Telegram</span></button>
+        <button class="nav-btn" data-check="facebook">f <span>Facebook</span></button>
+        <button class="nav-btn" data-check="instagram">◎ <span>Instagram</span></button>
+        <button class="nav-btn" data-check="whatsapp">◉ <span>WhatsApp</span></button>
+        <button class="nav-btn" data-check="viber">✆ <span>Viber</span></button>
+        <button class="nav-btn" data-check="olx">OLX <span>OLX</span></button>
+        <div class="nav-group-label">SAFEDEAL</div>
+        <button class="nav-btn" data-check="job">▣ <span>Вакансія</span></button>
+        <button class="nav-btn" data-page="reports">⚑ <span>База скарг</span></button>
         <button class="nav-btn" data-page="history">◷ <span>Історія</span></button>
         <button class="nav-btn" data-page="profile">♙ <span>Профіль</span></button>
       </nav>
@@ -54,19 +62,39 @@
       </header>
 
       <section class="page active" id="home">
-        <section class="sd-hero-v2">
-          <div class="sd-hero-copy">
-            <span class="sd-kicker">SAFEDEAL • ЗАХИСТ ПЕРЕД ДІЄЮ</span>
-            <h2>Перевіряйте. <em>Дійте безпечно.</em></h2>
-            <p>Перевіряйте посилання, продавців, вакансії, номери та Telegram на ризики шахрайства — до оплати або передачі даних.</p>
-            <div class="sd-hero-badges">
-              <span>✓ Ризик 0–100</span><span>✓ База скарг</span><span>✓ Зрозумілий висновок</span>
+        <section class="v8-hero">
+          <div class="v8-hero-copy">
+            <span class="v8-live-pill"><i></i> SAFEDEAL SECURITY</span>
+            <h2>Перевір перед тим,<br><em>як довіряти.</em></h2>
+            <p>Одна перевірка об’єднує сигнали з посилань, номерів, соцмереж, месенджерів, скарг і підозрілих пропозицій.</p>
+            <div class="v8-hero-actions">
+              <button class="primary" type="button" data-focus-check>Почати перевірку</button>
+              <button class="v8-secondary" type="button" data-page="reports">База скарг</button>
+            </div>
+            <div class="v8-proof">
+              <span><b>0–100</b> оцінка ризику</span>
+              <span><b>11</b> режимів перевірки</span>
+              <span><b>24/7</b> доступ до сервісу</span>
             </div>
           </div>
-          <div class="sd-shield-scene" aria-hidden="true">
-            <div class="sd-shield-glow"></div>
-            <div class="sd-shield"><span>✓</span></div>
+          <div class="v8-preview" aria-hidden="true">
+            <div class="v8-preview-top"><span>Результат</span><b>SD-84721</b></div>
+            <div class="v8-risk-ring"><strong>74</strong><small>/100</small></div>
+            <div class="v8-risk-label">ВИСОКИЙ РИЗИК</div>
+            <div class="v8-mini-signal">⚠ Є підтверджені скарги</div>
+            <div class="v8-mini-signal">⚠ Підозріла пропозиція</div>
+            <div class="v8-mini-signal ok">✓ Офіційний домен платформи</div>
+            <div class="v8-platform-row"><span>TG</span><span>f</span><span>◎</span><span>WA</span><span>V</span><span>OLX</span></div>
           </div>
+        </section>
+
+        <section class="v8-platform-launcher">
+          <button data-check="contact"><i class="v8-icon tg">➤</i><span><b>Telegram</b><small>Канал / профіль</small></span></button>
+          <button data-check="facebook"><i class="v8-icon fb">f</i><span><b>Facebook</b><small>Профіль / сторінка</small></span></button>
+          <button data-check="instagram"><i class="v8-icon ig">◎</i><span><b>Instagram</b><small>Профіль</small></span></button>
+          <button data-check="whatsapp"><i class="v8-icon wa">◉</i><span><b>WhatsApp</b><small>Номер / посилання</small></span></button>
+          <button data-check="viber"><i class="v8-icon vb">✆</i><span><b>Viber</b><small>Номер / посилання</small></span></button>
+          <button data-check="olx"><i class="v8-icon olx">OLX</i><span><b>OLX</b><small>Оголошення / продавець</small></span></button>
         </section>
 
         <article class="check-panel premium-check-panel" id="quickCheck">
@@ -78,18 +106,24 @@
             <span class="sd-safe-chip">🛡 Анонімно • Швидко • Безпечно</span>
           </div>
 
-          <div class="check-tabs sd-check-grid">
-            <button class="check-tab active" data-type="seller"><span class="sd-tab-icon seller-icon">♟</span><strong>Продавець</strong><small>Перевірити продавця</small></button>
-            <button class="check-tab" data-type="job"><span class="sd-tab-icon job-icon">▣</span><strong>Вакансія</strong><small>Перевірити пропозицію</small></button>
-            <button class="check-tab" data-type="link"><span class="sd-tab-icon link-icon">↗</span><strong>Посилання</strong><small>Перевірити URL</small></button>
-            <button class="check-tab" data-type="contact"><span class="sd-tab-icon tg-icon">➤</span><strong>Telegram</strong><small>Канал або @username</small></button>
-            <button class="check-tab" data-type="phone"><span class="sd-tab-icon phone-icon">☎</span><strong>Номер</strong><small>Перевірити телефон</small></button>
-            <button class="check-tab" data-type="text"><span class="sd-tab-icon text-icon">▤</span><strong>Текст / скрін</strong><small>Аналіз повідомлення</small></button>
+          <div class="check-tabs v8-check-grid">
+            <button class="check-tab active" data-type="seller"><span class="sd-tab-icon seller-icon">♟</span><strong>Продавець</strong><small>Угода / контакт</small></button>
+            <button class="check-tab" data-type="phone"><span class="sd-tab-icon phone-icon">☎</span><strong>Номер</strong><small>Телефон</small></button>
+            <button class="check-tab" data-type="link"><span class="sd-tab-icon link-icon">↗</span><strong>Посилання</strong><small>URL / сайт</small></button>
+            <button class="check-tab" data-type="contact"><span class="sd-tab-icon tg-icon">➤</span><strong>Telegram</strong><small>@username / t.me</small></button>
+            <button class="check-tab" data-type="facebook"><span class="sd-tab-icon fb-icon">f</span><strong>Facebook</strong><small>Профіль / сторінка</small></button>
+            <button class="check-tab" data-type="instagram"><span class="sd-tab-icon ig-icon">◎</span><strong>Instagram</strong><small>@username / URL</small></button>
+            <button class="check-tab" data-type="whatsapp"><span class="sd-tab-icon wa-icon">◉</span><strong>WhatsApp</strong><small>Номер / wa.me</small></button>
+            <button class="check-tab" data-type="viber"><span class="sd-tab-icon vb-icon">✆</span><strong>Viber</strong><small>Номер / URL</small></button>
+            <button class="check-tab" data-type="olx"><span class="sd-tab-icon olx-icon">OLX</span><strong>OLX</strong><small>Оголошення</small></button>
+            <button class="check-tab" data-type="job"><span class="sd-tab-icon job-icon">▣</span><strong>Вакансія</strong><small>Робота / заробіток</small></button>
+            <button class="check-tab" data-type="text"><span class="sd-tab-icon text-icon">▤</span><strong>Текст / скрін</strong><small>OCR / повідомлення</small></button>
           </div>
 
           <div class="sd-input-label"><span>Дані для перевірки</span><small id="activeModeLabel">Вставте потрібні дані нижче</small></div>
           <textarea id="checkInput" placeholder="Встав посилання, номер, @username або текст повідомлення..."></textarea>
           <div class="check-hint" id="checkHint">Для Telegram встав @username або t.me-посилання. Для скріну — завантаж зображення нижче.</div>
+          <div class="v8-context-note">Для продавця / OLX можеш додати текст відгуків або опис підозрілої поведінки. SafeDeal шукатиме шаблонні відгуки, різкі сплески та надані ознаки прихованих негативних відгуків — без тверджень без доказів.</div>
           <div class="upload-row">
             <label class="upload-btn" for="screenshotInput">🖼 Завантажити скрін</label>
             <input id="screenshotInput" type="file" accept="image/*" hidden>
@@ -195,6 +229,11 @@
               <option value="link">Посилання</option>
               <option value="contact">Telegram</option>
               <option value="phone">Номери телефону</option>
+              <option value="facebook">Facebook</option>
+              <option value="instagram">Instagram</option>
+              <option value="whatsapp">WhatsApp</option>
+              <option value="viber">Viber</option>
+              <option value="olx">OLX</option>
             </select>
             <button class="primary" id="searchReports">Знайти</button>
           </div>
@@ -216,6 +255,11 @@
               <option value="link">Посилання</option>
               <option value="contact">Telegram</option>
               <option value="phone">Номер телефону</option>
+              <option value="facebook">Facebook</option>
+              <option value="instagram">Instagram</option>
+              <option value="whatsapp">WhatsApp</option>
+              <option value="viber">Viber</option>
+              <option value="olx">OLX</option>
             </select>
             <input id="reportReason" class="text-input" placeholder="Коротко: що сталося?">
             <textarea id="reportDetails" placeholder="Додаткові факти (необов’язково)"></textarea>
@@ -339,6 +383,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js" defer></script>
-  <script src="/app.js?v=7.0" defer></script>
+  <script src="/app.js?v=8.0" defer></script>
 </body>
 </html>

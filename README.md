@@ -1,28 +1,24 @@
-# SafeDeal v7.0 Launch Candidate
+# SafeDeal v8.0 All-in-One
 
-Consolidated build with seller/job/link/Telegram/phone/text checks, browser OCR, PostgreSQL history/accounts, moderated complaints, appeals, admin moderation, password reset, and production hardening.
+Це великий пакет перед публічним тестуванням.
 
-## Deploy
-Replace/upload these files to the repository and deploy the latest commit on Render.
+## Додано
+- повний редизайн SafeDeal у premium cybersecurity стилі;
+- Facebook;
+- Instagram;
+- WhatsApp;
+- Viber;
+- OLX;
+- Telegram, номер, посилання, продавець, вакансія, текст/OCR;
+- єдина база скарг і risk score;
+- обережний аналіз наданих даних про відгуки продавця;
+- сигнали про можливе приховування/видалення негативних відгуків лише коли у введених даних є підстави;
+- платформи показують `Недостатньо публічних даних`, якщо SafeDeal не може підтвердити достатньо інформації.
 
-Required environment variables: `DATABASE_URL`, `ADMIN_KEY`. Set `APP_BASE_URL` to the final public URL. External provider keys are optional but improve coverage.
+## Важливо
+SafeDeal не має доступу до приватних даних Facebook / Instagram / WhatsApp / Viber / OLX.
+Перевірка використовує лише введені користувачем дані, доступні публічні URL/метадані,
+технічні сигнали та модеровану базу скарг. Відсутність збігів не є гарантією безпеки.
 
-For password reset to arbitrary recipients, `RESEND_FROM` must use a domain verified in Resend. Until that is done, Resend testing restrictions still apply.
-
-`SHOW_DEMO_DATA` should stay `false` in production.
-
-## Important
-No automated anti-fraud system can guarantee that a person or deal is safe or fraudulent. SafeDeal exposes risk signals and moderated community reports, with an appeal workflow.
-
-
-## v7.1 Premium Design
-- Перенесено преміальний темно-синій/фіолетовий дизайн на реальний SafeDeal.
-- Backend, API, IDs елементів, app.js, акаунти, історія, скарги та адмінка не змінювались.
-- OLX та Instagram у промо-блоці позначені «СКОРО», щоб не заявляти функції до їх реалізації.
-
-
-## v7.2 UI refresh
-- Головна сторінка перероблена у компактніший premium mobile-first стиль.
-- Кнопки швидкої перевірки розкладені 3×2 на desktop і 2×3 на телефоні.
-- Додано чіткий демонстраційний приклад результату з позначкою DEMO.
-- Backend/API/app.js не змінювалися.
+## Розгортання
+Замінити однойменні файли у GitHub. Render env variables не змінювати.

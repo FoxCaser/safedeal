@@ -64,7 +64,12 @@ function updateCheckHint() {
     link: "Встав повне http:// або https:// посилання.",
     contact: "Встав @username, t.me/username або приватне t.me/+... запрошення. SafeDeal перевірить публічне прев’ю та базу скарг.",
     phone: "Встав номер телефону. SafeDeal нормалізує його та перевірить точні збіги у модерованій базі скарг.",
-    text: "Встав підозрілий текст або завантаж скріншот — OCR розпізнає українську та англійську."
+    text: "Встав підозрілий текст або завантаж скріншот — OCR розпізнає українську та англійську.",
+    facebook: "Встав посилання на Facebook-профіль, сторінку, групу або публікацію.",
+    instagram: "Встав @username або повне посилання Instagram.",
+    whatsapp: "Встав номер телефону або офіційне wa.me / WhatsApp-посилання.",
+    viber: "Встав номер телефону або офіційне Viber-посилання.",
+    olx: "Встав посилання на OLX-оголошення / продавця або дані продавця."
   };
   const placeholders = {
     seller: "Встав дані продавця або переписку...",
@@ -72,7 +77,12 @@ function updateCheckHint() {
     link: "https://example.com/...",
     contact: "@username або https://t.me/username",
     phone: "+380 67 123 45 67",
-    text: "Встав текст повідомлення або завантаж скрін..."
+    text: "Встав текст повідомлення або завантаж скрін...",
+    facebook: "https://facebook.com/...",
+    instagram: "@username або https://instagram.com/username",
+    whatsapp: "+380... або https://wa.me/...",
+    viber: "+380... або Viber-посилання",
+    olx: "https://www.olx.ua/d/uk/obyavlenie/..."
   };
   hint.textContent = hints[state.type] || hints.seller;
   input.placeholder = placeholders[state.type] || placeholders.seller;
@@ -768,6 +778,16 @@ $("#runCheck").addEventListener("click", async () => {
       techBox.classList.remove("hidden");
     }
 
+    if (r.platform) {
+      const p = r.platform;
+      techGrid.insertAdjacentHTML("afterbegin", `
+        <div class="tech-item platform-tech"><span>🌐 Платформа</span><b>${escapeHtml(p.label || p.type || "—")}</b></div>
+        <div class="tech-item platform-tech"><span>🎯 Ціль</span><b>${escapeHtml(p.normalized || "—")}</b></div>
+        <div class="tech-item platform-tech"><span>🔎 Режим</span><b>${p.limited ? "Часткова публічна перевірка" : "Публічна перевірка"}</b></div>
+      `);
+      techBox.classList.remove("hidden");
+    }
+
     saveLocalHistory(r, historyPreview || input);
 
     const card = $("#resultCard");
@@ -826,7 +846,12 @@ function typeLabel(type) {
     link: "Посилання",
     contact: "Telegram",
     phone: "Номер телефону",
-    text: "Текст"
+    text: "Текст",
+    facebook: "Facebook",
+    instagram: "Instagram",
+    whatsapp: "WhatsApp",
+    viber: "Viber",
+    olx: "OLX"
   })[type] || type;
 }
 
