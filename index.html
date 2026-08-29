@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#07111f">
   <title>SafeDeal — перевіряй перед дією</title>
-  <link rel="stylesheet" href="/style.css?v=6.2">
+  <link rel="stylesheet" href="/style.css?v=6.5">
 </head>
 <body>
   <div class="app-shell">
@@ -23,7 +23,8 @@
         <button class="nav-btn" data-check="seller">♙ <span>Перевірка продавця</span></button>
         <button class="nav-btn" data-check="job">▣ <span>Перевірка вакансії</span></button>
         <button class="nav-btn" data-check="link">🔗 <span>Перевірка посилання</span></button>
-        <button class="nav-btn" data-check="contact">✈ <span>Telegram / номер</span></button>
+        <button class="nav-btn" data-check="contact">✈ <span>Telegram</span></button>
+        <button class="nav-btn" data-check="phone">☎ <span>Номер телефону</span></button>
         <button class="nav-btn" data-check="text">▤ <span>Текст / скрін</span></button>
         <button class="nav-btn" data-page="reputation">↻ <span>Репутація</span></button>
         <button class="nav-btn" data-page="reports">⚑ <span>База скарг</span></button>
@@ -57,7 +58,7 @@
             <span class="eyebrow">SAFE BEFORE ACTION</span>
             <h2>Перевір підозріле<br><em>до того, як діяти</em></h2>
             <p>
-              Продавець, вакансія, посилання, Telegram-контакт або підозрілий текст —
+              Продавець, вакансія, посилання, Telegram, номер телефону або підозрілий текст —
               SafeDeal збере сигнали ризику й пояснить, що саме насторожує.
             </p>
           </div>
@@ -80,6 +81,7 @@
             <button class="check-tab" data-type="job">Вакансія</button>
             <button class="check-tab" data-type="link">Посилання</button>
             <button class="check-tab" data-type="contact">Telegram</button>
+            <button class="check-tab" data-type="phone">Номер телефону</button>
             <button class="check-tab" data-type="text">Текст / скрін</button>
           </div>
 
@@ -205,7 +207,8 @@
               <option value="seller">Продавці</option>
               <option value="job">Вакансії</option>
               <option value="link">Посилання</option>
-              <option value="contact">Контакти</option>
+              <option value="contact">Telegram</option>
+              <option value="phone">Номери телефону</option>
             </select>
             <button class="primary" id="searchReports">Знайти</button>
           </div>
@@ -225,7 +228,8 @@
               <option value="seller">Продавець</option>
               <option value="job">Вакансія</option>
               <option value="link">Посилання</option>
-              <option value="contact">Контакт</option>
+              <option value="contact">Telegram</option>
+              <option value="phone">Номер телефону</option>
             </select>
             <input id="reportReason" class="text-input" placeholder="Коротко: що сталося?">
             <textarea id="reportDetails" placeholder="Додаткові факти (необов’язково)"></textarea>
@@ -333,6 +337,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js" defer></script>
-  <script src="/app.js?v=6.4.2" defer></script>
+  <script src="/app.js?v=6.5" defer></script>
 </body>
 </html>

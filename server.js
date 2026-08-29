@@ -35,7 +35,7 @@ app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan("tiny"));
 
-const ALLOWED_TYPES = new Set(["seller", "job", "link", "contact", "text"]);
+const ALLOWED_TYPES = new Set(["seller", "job", "link", "contact", "phone", "text"]);
 
 const demoApprovedReports = [
   {
@@ -418,6 +418,36 @@ function normalizeTargetKey(value = "") {
   return raw.slice(0, 220);
 }
 
+
+function extractPhoneTarget(input = "") {
+  const raw = compactSpaces(input || "");
+  if (!raw) return null;
+
+  const match = raw.match(/(?:\+?\d[\d\s().-]{6,}\d)/);
+  if (!match) return null;
+
+  const original = compactSpaces(match[0]);
+  let digits = original.replace(/\D/g, "");
+  if (digits.length < 8 || digits.length > 15) return null;
+
+  // Ukrainian local mobile/landline notation: 0XXXXXXXXX -> +380XXXXXXXXX.
+  if (digits.length === 10 && digits.startsWith("0")) {
+    digits = `38${digits}`;
+  }
+
+  const normalized = `+${digits}`;
+  const isUkraine = digits.length === 12 && digits.startsWith("380");
+  const validE164 = digits.length >= 8 && digits.length <= 15 && !/^0+$/.test(digits);
+
+  return {
+    original,
+    digits,
+    normalized,
+    valid: validE164,
+    country: isUkraine ? "Україна (+380)" : "Країну автоматично не підтверджено"
+  };
+}
+
 function extractFirstUrl(value = "") {
   const text = String(value).trim();
   const protocolMatch = text.match(/https?:\/\/[^\s<>"']+/i);
@@ -731,7 +761,7 @@ function scoreToLevel(score) {
 }
 
 
-function buildHumanVerdict({ score, type, telegram }) {
+function buildHumanVerdict({ score, type, telegram, phone, phoneModeratedMatches = 0 }) {
   const telegramLimited =
     type === "contact" &&
     telegram &&
@@ -740,6 +770,24 @@ function buildHumanVerdict({ score, type, telegram }) {
     !telegram.publicPostsOk;
 
   const privateInviteLimited = type === "contact" && telegram?.kind === "invite";
+
+  if (type === "phone" && !phone?.valid) {
+    return {
+      kind: "limited",
+      title: "Не вдалося розпізнати номер",
+      text: "Введіть повний номер телефону, бажано у міжнародному форматі, наприклад +380…",
+      evidence: "Номер не перевірено"
+    };
+  }
+
+  if (type === "phone" && phone?.valid && phoneModeratedMatches === 0 && score < 26) {
+    return {
+      kind: "ok",
+      title: "Збігів у базі SafeDeal не знайдено",
+      text: "Цей номер не збігся з модерованими скаргами SafeDeal. Це не підтверджує особу власника номера і не гарантує безпеку угоди.",
+      evidence: "Перевірено точний номер"
+    };
+  }
 
   if ((telegramLimited || privateInviteLimited) && score < 26) {
     return {
@@ -2609,6 +2657,19 @@ async function analyzeInput(type, input) {
   const facts = [];
   const actions = new Set(textAnalysis.actions);
   let technical = null;
+  const phone = safeType === "phone" ? extractPhoneTarget(input) : null;
+
+  if (safeType === "phone") {
+    if (!phone?.valid) {
+      reasons.push("Не вдалося розпізнати коректний номер телефону");
+      actions.add("Введіть номер повністю, бажано у форматі +код країни та номер.");
+    } else {
+      facts.push(`Нормалізований номер: ${phone.normalized}`);
+      facts.push(`Країна: ${phone.country}`);
+      facts.push("SafeDeal не визначає особу власника номера лише за номером телефону.");
+      actions.add("Якщо співрозмовник представляється банком або компанією, передзвоніть за номером з офіційного сайту цієї організації.");
+    }
+  }
 
   const telegramTarget = extractTelegramTarget(input, safeType === "contact");
   const telegram = telegramTarget ? await inspectTelegramPublic(telegramTarget) : null;
@@ -2644,19 +2705,31 @@ async function analyzeInput(type, input) {
   }
 
   const communityMatches = await findCommunityMatches(input);
-  if (communityMatches.length) {
-    const moderatedMatches = communityMatches.filter((x) => !String(x.code).startsWith("DEMO-"));
-    if (moderatedMatches.length) {
-      const points = Math.min(28, 12 + (moderatedMatches.length - 1) * 5);
-      score += points;
+  const moderatedMatches = communityMatches.filter((x) => !String(x.code).startsWith("DEMO-"));
+  if (moderatedMatches.length) {
+    const points = safeType === "phone"
+      ? Math.min(82, 55 + (moderatedMatches.length - 1) * 15)
+      : Math.min(28, 12 + (moderatedMatches.length - 1) * 5);
+    score += points;
+    if (safeType === "phone") {
+      reasons.push(`Точний номер знайдено у модерованій базі скарг SafeDeal: ${moderatedMatches.length}`);
+    } else {
       reasons.push(`У модерованій базі SafeDeal знайдено збігів: ${moderatedMatches.length}`);
-      actions.add("Перегляньте записи в базі скарг і перевірте факти перед оплатою або передачею даних.");
     }
+    actions.add("Перегляньте записи в базі скарг і перевірте факти перед оплатою або передачею даних.");
+  } else if (safeType === "phone" && phone?.valid) {
+    facts.push("Точних збігів номера у модерованій базі SafeDeal не знайдено.");
   }
 
   score = Math.max(0, Math.min(100, score));
   const { level, label } = scoreToLevel(score);
-  const verdict = buildHumanVerdict({ score, type: safeType, telegram });
+  const verdict = buildHumanVerdict({
+    score,
+    type: safeType,
+    telegram,
+    phone,
+    phoneModeratedMatches: moderatedMatches.length
+  });
 
   if (!reasons.length) {
     reasons.push(
@@ -2687,6 +2760,11 @@ async function analyzeInput(type, input) {
       title: telegram.title,
       description: telegram.description,
       audienceText: telegram.audienceText
+    } : null,
+    phone: phone?.valid ? {
+      normalized: phone.normalized,
+      country: phone.country,
+      exactModeratedMatches: moderatedMatches.length
     } : null,
     communityMatches: communityMatches.length,
     disclaimer:

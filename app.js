@@ -64,6 +64,7 @@ function updateCheckHint() {
     job: "Встав текст вакансії, умови роботи, @username або посилання роботодавця.",
     link: "Встав повне http:// або https:// посилання.",
     contact: "Встав @username, t.me/username або приватне t.me/+... запрошення. SafeDeal перевірить публічне прев’ю та базу скарг.",
+    phone: "Встав номер телефону. SafeDeal нормалізує його та перевірить точні збіги у модерованій базі скарг.",
     text: "Встав підозрілий текст або завантаж скріншот — OCR розпізнає українську та англійську."
   };
   const placeholders = {
@@ -71,6 +72,7 @@ function updateCheckHint() {
     job: "Встав текст вакансії або контакт роботодавця...",
     link: "https://example.com/...",
     contact: "@username або https://t.me/username",
+    phone: "+380 67 123 45 67",
     text: "Встав текст повідомлення або завантаж скрін..."
   };
   hint.textContent = hints[state.type] || hints.seller;
@@ -792,6 +794,7 @@ function typeLabel(type) {
     job: "Вакансія",
     link: "Посилання",
     contact: "Telegram",
+    phone: "Номер телефону",
     text: "Текст"
   })[type] || type;
 }
