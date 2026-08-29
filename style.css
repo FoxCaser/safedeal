@@ -394,3 +394,29 @@ textarea:focus{border-color:#3d78ff}.privacy-note{margin:10px 0;padding:10px 12p
 .danger-btn:hover{border-color:#b74a68;color:#ffe1e8}
 .danger-btn:disabled{opacity:.55;cursor:not-allowed}
 @media(max-width:800px){.security-fields{grid-template-columns:1fr}.security-actions{display:grid;grid-template-columns:1fr}.security-actions .primary,.security-actions .danger-btn{width:100%}}
+
+/* SafeDeal v6.4: OCR screenshot + Telegram intelligence */
+.check-hint{
+  margin:-2px 0 10px;
+  color:#7f9bb7;
+  font-size:10px;
+  line-height:1.45
+}
+.ocr-status{
+  margin-top:10px;
+  border:1px solid #214666;
+  background:#091b2d;
+  color:#a8c9e8;
+  border-radius:11px;
+  padding:10px 12px;
+  font-size:10px;
+  line-height:1.5
+}
+.ocr-status.success{border-color:#1d6b54;color:#8de5be;background:#09231d}
+.ocr-status.error{border-color:#74364a;color:#ffb4c3;background:#28111a}
+.telegram-tech{border-color:#28507a;background:linear-gradient(180deg,#0a1d31,#081726)}
+.telegram-tech span{color:#7dc1ff}
+.privacy-note{line-height:1.55}
+@media(max-width:650px){
+  .check-hint,.ocr-status{font-size:9px}
+}

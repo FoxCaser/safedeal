@@ -84,6 +84,7 @@
           </div>
 
           <textarea id="checkInput" placeholder="Встав посилання, номер, @username або текст повідомлення..."></textarea>
+          <div class="check-hint" id="checkHint">Для Telegram встав @username або t.me-посилання. Для скріну — завантаж зображення нижче.</div>
           <div class="upload-row">
             <label class="upload-btn" for="screenshotInput">🖼 Завантажити скрін</label>
             <input id="screenshotInput" type="file" accept="image/*" hidden>
@@ -93,8 +94,11 @@
             <img id="screenshotPreview" alt="Попередній перегляд скріну">
             <button class="remove-shot" id="removeScreenshot" type="button">×</button>
           </div>
+          <div class="ocr-status hidden" id="ocrStatus"></div>
 
           <div class="privacy-note">
+            🧠 OCR скріншота виконується у твоєму браузері. Саме зображення не завантажується на сервер SafeDeal; для аналізу надсилається лише розпізнаний текст.<br>
+
             🔒 Не надсилай паролі, PIN, CVV, SMS-коди або повні реквізити картки.
           </div>
 
@@ -317,6 +321,7 @@
     </nav>
   </div>
 
-  <script src="/app.js?v=6.2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js" defer></script>
+  <script src="/app.js?v=6.4" defer></script>
 </body>
 </html>

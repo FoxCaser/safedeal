@@ -2091,6 +2091,219 @@ async function inspectUrl(rawUrl) {
   };
 }
 
+
+function decodeHtmlText(value = "") {
+  return String(value)
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&#(\d+);/g, (_, n) => {
+      try { return String.fromCodePoint(Number(n)); } catch { return _; }
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => {
+      try { return String.fromCodePoint(parseInt(n, 16)); } catch { return _; }
+    });
+}
+
+function extractHtmlMeta(html = "", key = "") {
+  const escaped = String(key).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const patterns = [
+    new RegExp(`<meta[^>]+(?:property|name)=["']${escaped}["'][^>]+content=["']([^"']*)["'][^>]*>`, "i"),
+    new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]+(?:property|name)=["']${escaped}["'][^>]*>`, "i")
+  ];
+  for (const pattern of patterns) {
+    const match = String(html).match(pattern);
+    if (match) return compactSpaces(decodeHtmlText(match[1]));
+  }
+  return "";
+}
+
+function extractTelegramTarget(input = "", allowBare = false) {
+  const raw = String(input || "").trim();
+  if (!raw) return null;
+
+  const invite = raw.match(/(?:https?:\/\/)?(?:www\.)?(?:t\.me|telegram\.me|telegram\.dog)\/(?:joinchat\/|\+)([A-Za-z0-9_-]{8,})/i);
+  if (invite) {
+    return {
+      kind: "invite",
+      username: null,
+      inviteCode: invite[1],
+      normalized: `https://t.me/+${invite[1]}`,
+      publicUrl: null
+    };
+  }
+
+  const link = raw.match(/(?:https?:\/\/)?(?:www\.)?(?:t\.me|telegram\.me|telegram\.dog)\/(?:s\/)?([A-Za-z0-9_]{5,32})(?:[/?#]|$)/i);
+  if (link) {
+    const username = link[1].toLowerCase();
+    return {
+      kind: "username",
+      username,
+      inviteCode: null,
+      normalized: `@${username}`,
+      publicUrl: `https://t.me/${username}`
+    };
+  }
+
+  const at = raw.match(/(?:^|[\s([{])@([A-Za-z0-9_]{5,32})(?=$|[\s)\]},.!?:;])/);
+  if (at) {
+    const username = at[1].toLowerCase();
+    return {
+      kind: "username",
+      username,
+      inviteCode: null,
+      normalized: `@${username}`,
+      publicUrl: `https://t.me/${username}`
+    };
+  }
+
+  if (allowBare && /^[A-Za-z0-9_]{5,32}$/.test(raw)) {
+    const username = raw.toLowerCase();
+    return {
+      kind: "username",
+      username,
+      inviteCode: null,
+      normalized: `@${username}`,
+      publicUrl: `https://t.me/${username}`
+    };
+  }
+
+  return null;
+}
+
+async function inspectTelegramPublic(target) {
+  if (!target) return null;
+
+  if (target.kind === "invite") {
+    return {
+      target: target.normalized,
+      username: null,
+      kind: "invite",
+      publicUrl: null,
+      publicPreviewOk: false,
+      status: null,
+      title: null,
+      description: null,
+      audienceText: null,
+      fetchError: null
+    };
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 6500);
+  try {
+    const response = await fetch(target.publicUrl, {
+      signal: controller.signal,
+      redirect: "follow",
+      headers: {
+        "User-Agent": "Mozilla/5.0 SafeDeal/1.0",
+        "Accept": "text/html,application/xhtml+xml"
+      }
+    });
+
+    const html = (await response.text()).slice(0, 700000);
+    const title = extractHtmlMeta(html, "og:title") ||
+      compactSpaces(decodeHtmlText((html.match(/<title[^>]*>([^<]{1,300})<\/title>/i) || [])[1] || ""));
+    const description = extractHtmlMeta(html, "og:description") || extractHtmlMeta(html, "description");
+    const extra = compactSpaces(decodeHtmlText((html.match(/class=["'][^"']*tgme_page_extra[^"']*["'][^>]*>([\s\S]*?)<\/div>/i) || [])[1] || "")
+      .replace(/<[^>]+>/g, " "));
+
+    const combined = `${title} ${description} ${extra}`.toLowerCase();
+    let kind = "account_or_channel";
+    if (target.username.endsWith("bot") || /\bbot\b|бот/i.test(combined)) kind = "bot";
+    else if (/\bsubscribers?\b|підписник|подписчик/i.test(combined)) kind = "channel";
+    else if (/\bmembers?\b|учасник|участник/i.test(combined)) kind = "group";
+
+    const genericOnly = !description && /^telegram(?::\s*contact)?/i.test(title || "");
+    return {
+      target: target.normalized,
+      username: target.username,
+      kind,
+      publicUrl: target.publicUrl,
+      publicPreviewOk: response.ok && Boolean(title || description) && !genericOnly,
+      status: response.status,
+      title: title ? title.slice(0, 180) : null,
+      description: description ? description.slice(0, 700) : null,
+      audienceText: extra ? extra.slice(0, 120) : null,
+      fetchError: null
+    };
+  } catch (error) {
+    return {
+      target: target.normalized,
+      username: target.username,
+      kind: "account_or_channel",
+      publicUrl: target.publicUrl,
+      publicPreviewOk: false,
+      status: null,
+      title: null,
+      description: null,
+      audienceText: null,
+      fetchError: error.name || "telegram_preview_failed"
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function analyzeTelegramSignals(target, preview) {
+  let points = 0;
+  const reasons = [];
+  const facts = [];
+  const actions = [];
+
+  if (!target) return { points, reasons, facts, actions };
+
+  facts.push(`Telegram-ціль: ${target.normalized}`);
+  facts.push("Домен t.me є офіційним доменом Telegram, але це не підтверджує надійність конкретного акаунта чи каналу.");
+
+  if (target.kind === "invite") {
+    facts.push("Це приватне Telegram-запрошення: публічні дані каналу/групи можуть бути недоступні до вступу.");
+    actions.push("Не вступайте в невідомі приватні групи лише заради «верифікації», заробітку або отримання виплати.");
+    return { points, reasons, facts, actions };
+  }
+
+  const username = String(target.username || "").toLowerCase();
+  const previewText = normalizeText(`${preview?.title || ""} ${preview?.description || ""}`);
+  const brandWords = /(privat|приват|mono|olx|nova|novaposhta|steam|telegram|google|gmail|paypal|binance|bank|банк)/i;
+  const supportWords = /(support|help|security|admin|manager|official|verify|verification|service|підтрим|служб|адмін|менедж)/i;
+
+  if (brandWords.test(username) && supportWords.test(username)) {
+    points += 18;
+    reasons.push("Назва Telegram-акаунта схожа на службову підтримку або представника відомого бренду; офіційність не підтверджена");
+    actions.push("Перейдіть на офіційний сайт бренду й знайдіть Telegram-контакт там, а не через отримане повідомлення.");
+  }
+
+  if (/(crypto|invest|trade|profit|airdrop|bonus|earn|zarob|work|job|crypto)/i.test(username)) {
+    points += 5;
+    reasons.push("Назва Telegram-акаунта пов’язана із заробітком, інвестиціями або бонусами — потрібна додаткова перевірка");
+  }
+
+  if (preview?.publicPreviewOk) {
+    facts.push(`Публічне прев’ю Telegram доступне${preview.title ? `: ${preview.title}` : ""}`);
+  } else {
+    facts.push("Публічне прев’ю Telegram не вдалося підтвердити; це не означає ні шахрайство, ні безпечність.");
+  }
+
+  if (/seed\s*phrase|private\s*key|recovery\s*phrase|cvv|cvc|sms\s*code|код\s*(з|із)\s*sms|парол/i.test(previewText)) {
+    points += 38;
+    reasons.push("У публічному описі Telegram є запит або згадка критично чутливих даних");
+  }
+
+  if (/гарантован.*(дохід|прибут)|guaranteed.*profit|x\s?2|подвоїмо|100%.*profit|безризиков/i.test(previewText)) {
+    points += 22;
+    reasons.push("Публічний опис Telegram містить нереалістичні або гарантовані обіцянки прибутку");
+  }
+
+  if (/депозит|передоплат|activation fee|активац|внесок|поповн.*баланс/i.test(previewText)) {
+    points += 18;
+    reasons.push("У публічному описі Telegram є ознаки вимоги депозиту або платної активації");
+  }
+
+  return { points, reasons, facts, actions };
+}
+
 function analyzeTextSignals(type, input) {
   const text = normalizeText(input);
   let score = 8;
@@ -2253,6 +2466,20 @@ async function analyzeInput(type, input) {
   const actions = new Set(textAnalysis.actions);
   let technical = null;
 
+  const telegramTarget = extractTelegramTarget(input, safeType === "contact");
+  const telegram = telegramTarget ? await inspectTelegramPublic(telegramTarget) : null;
+  if (telegramTarget) {
+    const tgSignals = analyzeTelegramSignals(telegramTarget, telegram);
+    score += tgSignals.points;
+    reasons.push(...tgSignals.reasons);
+    facts.push(...tgSignals.facts);
+    tgSignals.actions.forEach((x) => actions.add(x));
+  } else if (safeType === "contact") {
+    score += 5;
+    reasons.push("Не вдалося розпізнати Telegram @username або t.me-посилання");
+    actions.add("Вставте точний @username або повне посилання t.me для точнішої перевірки.");
+  }
+
   const detectedUrl = extractFirstUrl(input);
 
   if (detectedUrl) {
@@ -2302,6 +2529,17 @@ async function analyzeInput(type, input) {
     facts: [...new Set(facts)],
     actions: [...actions],
     technical,
+    telegram: telegram ? {
+      target: telegram.target,
+      username: telegram.username,
+      kind: telegram.kind,
+      publicUrl: telegram.publicUrl,
+      publicPreviewOk: telegram.publicPreviewOk,
+      status: telegram.status,
+      title: telegram.title,
+      description: telegram.description,
+      audienceText: telegram.audienceText
+    } : null,
     communityMatches: communityMatches.length,
     disclaimer:
       "Це автоматична оцінка ризику, а не твердження про шахрайство, юридичний висновок чи гарантія безпеки. Перевіряйте факти самостійно."
@@ -2943,7 +3181,7 @@ app.get("/admin", (req, res) => {
 });
 
 app.post("/api/check", rateLimit({ max: 80 }), async (req, res) => {
-  const { type = "seller", input = "" } = req.body || {};
+  const { type = "seller", input = "", historyPreview = "" } = req.body || {};
 
   if (!String(input).trim()) {
     return res.status(400).json({ ok: false, error: "input_required" });
@@ -2960,7 +3198,7 @@ app.post("/api/check", rateLimit({ max: 80 }), async (req, res) => {
     if (clientId && databaseReady) {
       try {
         const authUser = await getAuthUser(req);
-        historySaved = await saveCheckHistory(clientId, authUser?.id || null, report, input);
+        historySaved = await saveCheckHistory(clientId, authUser?.id || null, report, compactSpaces(historyPreview || input).slice(0, 500));
       } catch (historyError) {
         console.error("History save error:", historyError.message);
       }

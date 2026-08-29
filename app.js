@@ -2,7 +2,9 @@ const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
 
 const state = {
-  type: "seller"
+  type: "seller",
+  screenshotFile: null,
+  screenshotOcrText: ""
 };
 
 const titles = {
@@ -53,9 +55,32 @@ function showPage(id) {
   if (id === "profile") loadProfile().catch(console.error);
 }
 
+function updateCheckHint() {
+  const hint = $("#checkHint");
+  const input = $("#checkInput");
+  if (!hint || !input) return;
+  const hints = {
+    seller: "Встав дані продавця, оголошення, реквізити контакту або текст переписки.",
+    job: "Встав текст вакансії, умови роботи, @username або посилання роботодавця.",
+    link: "Встав повне http:// або https:// посилання.",
+    contact: "Встав @username, t.me/username або приватне t.me/+... запрошення. SafeDeal перевірить публічне прев’ю та базу скарг.",
+    text: "Встав підозрілий текст або завантаж скріншот — OCR розпізнає українську та англійську."
+  };
+  const placeholders = {
+    seller: "Встав дані продавця або переписку...",
+    job: "Встав текст вакансії або контакт роботодавця...",
+    link: "https://example.com/...",
+    contact: "@username або https://t.me/username",
+    text: "Встав текст повідомлення або завантаж скрін..."
+  };
+  hint.textContent = hints[state.type] || hints.seller;
+  input.placeholder = placeholders[state.type] || placeholders.seller;
+}
+
 function selectType(type) {
   state.type = type;
   $$(".check-tab").forEach((b) => b.classList.toggle("active", b.dataset.type === type));
+  updateCheckHint();
   showPage("home");
   setTimeout(() => $("#quickCheck").scrollIntoView({ behavior: "smooth", block: "start" }), 50);
 }
@@ -63,6 +88,7 @@ function selectType(type) {
 $$('[data-page]').forEach((btn) => btn.addEventListener("click", () => showPage(btn.dataset.page)));
 $$('[data-check]').forEach((btn) => btn.addEventListener("click", () => selectType(btn.dataset.check)));
 $$(".check-tab").forEach((btn) => btn.addEventListener("click", () => selectType(btn.dataset.type)));
+updateCheckHint();
 
 const focusCheck = document.querySelector("[data-focus-check]");
 if (focusCheck) {
@@ -426,22 +452,72 @@ if (saveProfileBtn) {
   });
 }
 
-$("#runCheck").addEventListener("click", async () => {
-  const input = $("#checkInput").value.trim();
-  if (!input) {
-    $("#checkInput").focus();
-    return;
+async function recognizeScreenshot(file) {
+  const status = $("#ocrStatus");
+  if (!file) return "";
+  if (!globalThis.Tesseract?.recognize) throw new Error("ocr_engine_unavailable");
+  if (!String(file.type || "").startsWith("image/")) throw new Error("ocr_not_image");
+  if (file.size > 8 * 1024 * 1024) throw new Error("ocr_file_too_large");
+
+  if (status) {
+    status.classList.remove("hidden", "error", "success");
+    status.textContent = "OCR: готуємо розпізнавання…";
   }
+
+  const result = await globalThis.Tesseract.recognize(file, "ukr+eng", {
+    logger: (message) => {
+      if (!status) return;
+      if (message.status === "recognizing text") {
+        const pct = Math.max(0, Math.min(100, Math.round((Number(message.progress) || 0) * 100)));
+        status.textContent = `OCR: розпізнаємо текст — ${pct}%`;
+      } else if (message.status) {
+        status.textContent = `OCR: ${String(message.status).replaceAll("_", " ")}…`;
+      }
+    }
+  });
+
+  const text = String(result?.data?.text || "").replace(/\n{3,}/g, "\n\n").trim();
+  if (status) {
+    status.classList.add(text ? "success" : "error");
+    status.textContent = text
+      ? `OCR готовий ✅ Розпізнано ${text.length} символів. Перевір текст нижче — його можна відредагувати.`
+      : "OCR не знайшов читабельного тексту. Спробуй чіткіший скрін.";
+  }
+  return text;
+}
+
+$("#runCheck").addEventListener("click", async () => {
+  let input = $("#checkInput").value.trim();
+  const file = state.screenshotFile || $("#screenshotInput")?.files?.[0] || null;
+  let historyPreview = input;
 
   const button = $("#runCheck");
   button.disabled = true;
-  button.textContent = "Перевіряємо...";
 
   try {
+    if (file) {
+      button.textContent = "Розпізнаємо скрін...";
+      const ocrText = state.screenshotOcrText || await recognizeScreenshot(file);
+      if (ocrText) {
+        state.screenshotOcrText = ocrText;
+        if (!input) input = ocrText;
+        else if (!input.includes(ocrText)) input = `${input}\n\n${ocrText}`;
+        input = input.slice(0, 12000);
+        $("#checkInput").value = input;
+        historyPreview = `Скріншот OCR: ${String(file.name || "зображення").slice(0, 120)}`;
+      }
+    }
+
+    if (!input) {
+      $("#checkInput").focus();
+      throw new Error(file ? "ocr_no_text" : "input_required");
+    }
+
+    button.textContent = "Перевіряємо...";
     const res = await apiFetch("/api/check", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: state.type, input })
+      body: JSON.stringify({ type: state.type, input, historyPreview })
     });
 
     const data = await res.json();
@@ -617,14 +693,53 @@ $("#runCheck").addEventListener("click", async () => {
       techBox.classList.toggle("hidden", !(r.facts || []).length);
     }
 
-    saveLocalHistory(r, input);
+    if (r.telegram) {
+      const tg = r.telegram;
+      const kindMap = {
+        invite: "Приватне запрошення",
+        bot: "Бот",
+        channel: "Публічний канал",
+        group: "Публічна група",
+        account_or_channel: "Акаунт / канал"
+      };
+      const previewText = tg.kind === "invite"
+        ? "Обмежене — приватне запрошення"
+        : tg.publicPreviewOk
+          ? "Публічне прев’ю доступне"
+          : "Публічне прев’ю не підтверджено";
+      const titleText = tg.title ? String(tg.title).slice(0, 120) : "—";
+      techGrid.insertAdjacentHTML("afterbegin", `
+        <div class="tech-item telegram-tech"><span>✈ Telegram</span><b>${escapeHtml(tg.target || "—")}</b></div>
+        <div class="tech-item telegram-tech"><span>👤 Тип</span><b>${escapeHtml(kindMap[tg.kind] || "Акаунт / канал")}</b></div>
+        <div class="tech-item telegram-tech"><span>👁 Публічне прев’ю</span><b>${escapeHtml(previewText)}</b></div>
+        <div class="tech-item telegram-tech"><span>🏷 Назва</span><b>${escapeHtml(titleText)}</b></div>
+      `);
+      techBox.classList.remove("hidden");
+    }
+
+    saveLocalHistory(r, historyPreview || input);
 
     const card = $("#resultCard");
     card.classList.remove("hidden");
     card.scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (e) {
     console.error(e);
-    alert("Не вдалося виконати перевірку.");
+    const status = $("#ocrStatus");
+    const messages = {
+      ocr_engine_unavailable: "OCR-модуль не завантажився. Онови сторінку та спробуй ще раз.",
+      ocr_not_image: "Вибраний файл не є зображенням.",
+      ocr_file_too_large: "Скрін завеликий. Максимум 8 МБ.",
+      ocr_no_text: "На скріні не вдалося розпізнати текст.",
+      input_required: "Встав текст або завантаж скріншот."
+    };
+    const message = messages[e.message] || "Не вдалося виконати перевірку.";
+    if (status && String(e.message).startsWith("ocr_")) {
+      status.classList.remove("hidden", "success");
+      status.classList.add("error");
+      status.textContent = message;
+    } else {
+      alert(message);
+    }
   } finally {
     button.disabled = false;
     button.textContent = "⌕ Перевірити";
@@ -653,7 +768,7 @@ function typeLabel(type) {
     seller: "Продавець",
     job: "Вакансія",
     link: "Посилання",
-    contact: "Контакт",
+    contact: "Telegram",
     text: "Текст"
   })[type] || type;
 }
@@ -759,25 +874,56 @@ const screenshotName = document.querySelector("#screenshotName");
 const screenshotPreview = document.querySelector("#screenshotPreview");
 const screenshotPreviewWrap = document.querySelector("#screenshotPreviewWrap");
 const removeScreenshot = document.querySelector("#removeScreenshot");
+const ocrStatus = document.querySelector("#ocrStatus");
+let screenshotObjectUrl = "";
 
 if (screenshotInput) {
   screenshotInput.addEventListener("change", () => {
     const file = screenshotInput.files?.[0];
     if (!file) return;
 
+    if (!String(file.type || "").startsWith("image/")) {
+      screenshotInput.value = "";
+      if (ocrStatus) {
+        ocrStatus.classList.remove("hidden", "success");
+        ocrStatus.classList.add("error");
+        ocrStatus.textContent = "Потрібно вибрати зображення.";
+      }
+      return;
+    }
+
+    state.screenshotFile = file;
+    state.screenshotOcrText = "";
+    state.type = "text";
+    $$(".check-tab").forEach((b) => b.classList.toggle("active", b.dataset.type === "text"));
+    updateCheckHint();
+
     screenshotName.textContent = file.name;
-    const url = URL.createObjectURL(file);
-    screenshotPreview.src = url;
+    if (screenshotObjectUrl) URL.revokeObjectURL(screenshotObjectUrl);
+    screenshotObjectUrl = URL.createObjectURL(file);
+    screenshotPreview.src = screenshotObjectUrl;
     screenshotPreviewWrap.classList.remove("hidden");
+    if (ocrStatus) {
+      ocrStatus.classList.remove("hidden", "error", "success");
+      ocrStatus.textContent = "Скрін готовий. Натисни «Перевірити» — OCR запуститься локально у браузері.";
+    }
   });
 }
 
 if (removeScreenshot) {
   removeScreenshot.addEventListener("click", () => {
-    if (screenshotPreview.src) URL.revokeObjectURL(screenshotPreview.src);
+    if (screenshotObjectUrl) URL.revokeObjectURL(screenshotObjectUrl);
+    screenshotObjectUrl = "";
+    state.screenshotFile = null;
+    state.screenshotOcrText = "";
     screenshotInput.value = "";
     screenshotPreview.removeAttribute("src");
     screenshotPreviewWrap.classList.add("hidden");
     screenshotName.textContent = "Скрін не вибрано";
+    if (ocrStatus) {
+      ocrStatus.classList.add("hidden");
+      ocrStatus.textContent = "";
+      ocrStatus.classList.remove("error", "success");
+    }
   });
 }
