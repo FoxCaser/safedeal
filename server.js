@@ -145,6 +145,10 @@ async function initDatabase() {
       )
     `);
 
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_login_count INTEGER NOT NULL DEFAULT 0`);
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS login_locked_until TIMESTAMPTZ`);
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMPTZ`);
+
     await pool.query(`
       CREATE TABLE IF NOT EXISTS auth_sessions (
         token_hash TEXT PRIMARY KEY,
@@ -155,6 +159,19 @@ async function initDatabase() {
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at)`);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS password_reset_requests (
+        id UUID PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        token_hash TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        expires_at TIMESTAMPTZ NOT NULL,
+        used_at TIMESTAMPTZ
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_password_reset_user ON password_reset_requests(user_id, created_at DESC)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_password_reset_expires ON password_reset_requests(expires_at)`);
 
     await pool.query(`ALTER TABLE community_reports ADD COLUMN IF NOT EXISTS submitter_user_id UUID`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_reports_submitter_user ON community_reports(submitter_user_id)`);
@@ -178,6 +195,7 @@ async function initDatabase() {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_check_history_client_created ON check_history(client_id, created_at DESC)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_check_history_user_created ON check_history(user_id, created_at DESC)`);
     await pool.query(`DELETE FROM auth_sessions WHERE expires_at <= NOW()`);
+    await pool.query(`DELETE FROM password_reset_requests WHERE expires_at <= NOW() OR used_at IS NOT NULL`);
     databaseReady = true;
     console.log("Database: connected");
   } catch (error) {
@@ -205,6 +223,11 @@ function normalizeEmail(value = "") {
 
 function validEmail(value = "") {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) && value.length <= 254;
+}
+
+function validNewPassword(value = "") {
+  const password = String(value || "");
+  return password.length >= 10 && password.length <= 128 && /[A-Za-zА-Яа-яІіЇїЄє]/.test(password) && /\d/.test(password);
 }
 
 function parseCookies(req) {
@@ -2319,6 +2342,7 @@ app.get("/api/health", (req, res) => {
     databaseConfigured: Boolean(DATABASE_URL),
     databaseReady,
     accountAuthReady: databaseReady,
+    accountSecurityV62: databaseReady,
     adminConfigured: Boolean(ADMIN_KEY)
   });
 });
@@ -2345,7 +2369,7 @@ app.post("/api/auth/register", rateLimit({ windowMs: 60 * 60 * 1000, max: 8 }), 
   const password = String(req.body?.password || "");
   let nickname = compactSpaces(req.body?.nickname || "").slice(0, 40);
   if (!validEmail(email)) return res.status(400).json({ ok: false, error: "invalid_email" });
-  if (password.length < 8 || password.length > 128) return res.status(400).json({ ok: false, error: "weak_password" });
+  if (!validNewPassword(password)) return res.status(400).json({ ok: false, error: "weak_password" });
 
   try {
     await ensureClientProfile(clientId);
@@ -2380,11 +2404,46 @@ app.post("/api/auth/login", rateLimit({ windowMs: 15 * 60 * 1000, max: 20 }), as
   const password = String(req.body?.password || "");
   if (!validEmail(email) || !password) return res.status(400).json({ ok: false, error: "invalid_credentials" });
   try {
-    const { rows } = await pool.query(`SELECT id, email, password_hash, nickname, email_verified, created_at FROM users WHERE email = $1 LIMIT 1`, [email]);
+    const { rows } = await pool.query(
+      `SELECT id, email, password_hash, nickname, email_verified, created_at,
+              failed_login_count, login_locked_until
+       FROM users WHERE email = $1 LIMIT 1`,
+      [email]
+    );
     const user = rows[0];
-    if (!user || !(await verifyPassword(password, user.password_hash))) return res.status(401).json({ ok: false, error: "invalid_credentials" });
+
+    // Keep response timing less revealing for unknown emails.
+    if (!user) {
+      await scryptAsync(password.slice(0, 128), "safedeal-missing-user");
+      return res.status(401).json({ ok: false, error: "invalid_credentials" });
+    }
+
+    const lockedUntil = user.login_locked_until ? new Date(user.login_locked_until) : null;
+    if (lockedUntil && lockedUntil.getTime() > Date.now()) {
+      const retryAfterSeconds = Math.max(1, Math.ceil((lockedUntil.getTime() - Date.now()) / 1000));
+      res.set("Retry-After", String(retryAfterSeconds));
+      return res.status(429).json({ ok: false, error: "login_temporarily_locked", retryAfterSeconds });
+    }
+
+    const passwordOk = await verifyPassword(password, user.password_hash);
+    if (!passwordOk) {
+      const failed = Number(user.failed_login_count || 0) + 1;
+      if (failed >= 5) {
+        await pool.query(
+          `UPDATE users SET failed_login_count = 0, login_locked_until = NOW() + INTERVAL '15 minutes', updated_at = NOW() WHERE id = $1`,
+          [user.id]
+        );
+        return res.status(429).json({ ok: false, error: "login_temporarily_locked", retryAfterSeconds: 900 });
+      }
+      await pool.query(`UPDATE users SET failed_login_count = $1, updated_at = NOW() WHERE id = $2`, [failed, user.id]);
+      return res.status(401).json({ ok: false, error: "invalid_credentials" });
+    }
+
     await attachAnonymousDataToUser(user.id, clientId);
-    await pool.query(`UPDATE users SET last_login_at = NOW() WHERE id = $1`, [user.id]);
+    await pool.query(
+      `UPDATE users SET last_login_at = NOW(), failed_login_count = 0, login_locked_until = NULL, updated_at = NOW() WHERE id = $1`,
+      [user.id]
+    );
     await createAuthSession(res, user.id);
     res.json({ ok: true, authenticated: true, user: { id: user.id, email: user.email, nickname: user.nickname, emailVerified: user.email_verified, createdAt: user.created_at } });
   } catch (error) {
@@ -2402,6 +2461,80 @@ app.post("/api/auth/logout", rateLimit({ max: 120 }), async (req, res) => {
   } catch {
     clearSessionCookie(res);
     res.json({ ok: true });
+  }
+});
+
+
+app.post("/api/auth/change-password", rateLimit({ windowMs: 60 * 60 * 1000, max: 8 }), async (req, res) => {
+  if (!databaseReady || !pool) return res.status(503).json({ ok: false, error: "database_unavailable" });
+  try {
+    const user = await getAuthUser(req);
+    if (!user) return res.status(401).json({ ok: false, error: "auth_required" });
+    const currentPassword = String(req.body?.currentPassword || "");
+    const newPassword = String(req.body?.newPassword || "");
+    if (!currentPassword) return res.status(400).json({ ok: false, error: "current_password_required" });
+    if (!validNewPassword(newPassword)) return res.status(400).json({ ok: false, error: "weak_new_password" });
+    if (currentPassword === newPassword) return res.status(400).json({ ok: false, error: "password_unchanged" });
+
+    const { rows } = await pool.query(`SELECT password_hash FROM users WHERE id = $1 LIMIT 1`, [user.id]);
+    if (!rows.length || !(await verifyPassword(currentPassword, rows[0].password_hash))) {
+      return res.status(401).json({ ok: false, error: "current_password_invalid" });
+    }
+
+    const passwordHash = await createPasswordHash(newPassword);
+    await pool.query(
+      `UPDATE users SET password_hash = $1, password_changed_at = NOW(), failed_login_count = 0,
+                        login_locked_until = NULL, updated_at = NOW() WHERE id = $2`,
+      [passwordHash, user.id]
+    );
+    await pool.query(`DELETE FROM auth_sessions WHERE user_id = $1`, [user.id]);
+    await createAuthSession(res, user.id);
+    res.json({ ok: true, passwordChanged: true, otherSessionsRevoked: true });
+  } catch (error) {
+    console.error("Change password error:", error.message);
+    res.status(500).json({ ok: false, error: "password_change_failed" });
+  }
+});
+
+app.post("/api/auth/logout-all", rateLimit({ windowMs: 60 * 60 * 1000, max: 12 }), async (req, res) => {
+  if (!databaseReady || !pool) return res.status(503).json({ ok: false, error: "database_unavailable" });
+  try {
+    const user = await getAuthUser(req);
+    if (!user) {
+      clearSessionCookie(res);
+      return res.status(401).json({ ok: false, error: "auth_required" });
+    }
+    const result = await pool.query(`DELETE FROM auth_sessions WHERE user_id = $1`, [user.id]);
+    clearSessionCookie(res);
+    res.json({ ok: true, sessionsRevoked: result.rowCount || 0 });
+  } catch (error) {
+    clearSessionCookie(res);
+    console.error("Logout all error:", error.message);
+    res.status(500).json({ ok: false, error: "logout_all_failed" });
+  }
+});
+
+app.post("/api/auth/forgot-password", rateLimit({ windowMs: 60 * 60 * 1000, max: 5 }), async (req, res) => {
+  if (!databaseReady || !pool) return res.status(503).json({ ok: false, error: "database_unavailable" });
+  const email = normalizeEmail(req.body?.email || "");
+  if (!validEmail(email)) return res.status(400).json({ ok: false, error: "invalid_email" });
+  try {
+    const { rows } = await pool.query(`SELECT id FROM users WHERE email = $1 LIMIT 1`, [email]);
+    if (rows.length) {
+      const token = crypto.randomBytes(32).toString("base64url");
+      const tokenHash = sessionTokenHash(token);
+      await pool.query(`DELETE FROM password_reset_requests WHERE user_id = $1 AND used_at IS NULL`, [rows[0].id]);
+      await pool.query(
+        `INSERT INTO password_reset_requests (id, user_id, token_hash, expires_at)
+         VALUES ($1, $2, $3, NOW() + INTERVAL '30 minutes')`,
+        [crypto.randomUUID(), rows[0].id, tokenHash]
+      );
+      // Token is intentionally not returned or logged. An email provider will deliver it in a later version.
+    }
+    res.json({ ok: true, accepted: true, emailDeliveryConfigured: false });
+  } catch (error) {
+    console.error("Forgot password error:", error.message);
+    res.status(500).json({ ok: false, error: "reset_request_failed" });
   }
 });
 
@@ -2515,9 +2648,11 @@ app.get("/api/profile", rateLimit({ max: 240 }), async (req, res) => {
                 COALESCE((SELECT COUNT(*) FROM community_reports WHERE submitter_user_id = u.id), 0)::int AS report_count,
                 COALESCE((SELECT COUNT(*) FROM community_reports WHERE submitter_user_id = u.id AND status = 'pending'), 0)::int AS pending_count,
                 COALESCE((SELECT COUNT(*) FROM community_reports WHERE submitter_user_id = u.id AND status = 'approved'), 0)::int AS approved_count,
-                COALESCE((SELECT COUNT(*) FROM community_reports WHERE submitter_user_id = u.id AND status = 'rejected'), 0)::int AS rejected_count
+                COALESCE((SELECT COUNT(*) FROM community_reports WHERE submitter_user_id = u.id AND status = 'rejected'), 0)::int AS rejected_count,
+                COALESCE((SELECT COUNT(*) FROM auth_sessions WHERE user_id = u.id AND expires_at > NOW()), 0)::int AS active_session_count,
+                u.password_changed_at
          FROM users u WHERE u.id = $1 LIMIT 1`, [user.id]);
-      return res.json({ ok: true, profile: rows[0], account: { authenticated: true, email: user.email, emailVerified: user.email_verified } });
+      return res.json({ ok: true, profile: rows[0], account: { authenticated: true, email: user.email, emailVerified: user.email_verified, activeSessions: rows[0]?.active_session_count || 0, passwordChangedAt: rows[0]?.password_changed_at || null } });
     }
     const { rows } = await pool.query(
       `SELECT p.client_id, p.nickname, p.created_at, p.updated_at,

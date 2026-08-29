@@ -382,3 +382,15 @@ textarea:focus{border-color:#3d78ff}.privacy-note{margin:10px 0;padding:10px 12p
   .auth-actions{display:grid;grid-template-columns:1fr}
   .auth-actions .primary,.auth-actions .secondary-btn{width:100%;min-width:0}
 }
+
+
+/* SafeDeal v6.2: account security */
+.link-btn{border:0;background:transparent;color:#73b7ff;padding:9px 4px;font-size:10px;font-weight:800;cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+.link-btn:disabled{opacity:.55;cursor:not-allowed}
+.security-panel{margin-top:18px;padding-top:18px;border-top:1px solid #173552}
+.security-fields{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.security-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+.danger-btn{border:1px solid #713044;background:#26101a;color:#ffb8c7;border-radius:10px;padding:10px 14px;font-size:10px;font-weight:800;cursor:pointer}
+.danger-btn:hover{border-color:#b74a68;color:#ffe1e8}
+.danger-btn:disabled{opacity:.55;cursor:not-allowed}
+@media(max-width:800px){.security-fields{grid-template-columns:1fr}.security-actions{display:grid;grid-template-columns:1fr}.security-actions .primary,.security-actions .danger-btn{width:100%}}

@@ -214,6 +214,7 @@ function renderAccount(account = {}) {
   if (userBox) userBox.classList.toggle("hidden", !loggedIn);
   if ($("#accountEmail")) $("#accountEmail").textContent = loggedIn ? (account.email || "") : "";
   if ($("#accountBadge")) $("#accountBadge").textContent = loggedIn ? "Синхронізація активна" : "Гостьовий профіль";
+  if ($("#activeSessions")) $("#activeSessions").textContent = loggedIn ? String(Number(account.activeSessions) || 1) : "0";
   const copy = $("#profileCopy");
   if (copy) copy.textContent = loggedIn
     ? "Ти увійшов у SafeDeal. Історія перевірок і скарги синхронізуються між пристроями через PostgreSQL."
@@ -223,9 +224,15 @@ function renderAccount(account = {}) {
 function authErrorText(code) {
   const map = {
     invalid_email: "Введи правильну email-адресу.",
-    weak_password: "Пароль має містити щонайменше 8 символів.",
+    weak_password: "Новий пароль: мінімум 10 символів, хоча б одна літера та одна цифра.",
+    weak_new_password: "Новий пароль: мінімум 10 символів, хоча б одна літера та одна цифра.",
     email_exists: "Акаунт з таким email уже існує. Натисни «Увійти».",
     invalid_credentials: "Неправильний email або пароль.",
+    login_temporarily_locked: "Забагато неправильних паролів. Вхід тимчасово заблоковано приблизно на 15 хвилин.",
+    current_password_required: "Введи поточний пароль.",
+    current_password_invalid: "Поточний пароль неправильний.",
+    password_unchanged: "Новий пароль має відрізнятися від поточного.",
+    auth_required: "Спочатку увійди в акаунт.",
     rate_limited: "Забагато спроб. Спробуй трохи пізніше.",
     database_unavailable: "База даних тимчасово недоступна."
   };
@@ -304,6 +311,91 @@ $("#authLogout")?.addEventListener("click", async () => {
     loadHistory().catch(()=>{});
   } finally {
     if (btn) btn.disabled = false;
+  }
+});
+
+
+const changePasswordBtn = $("#changePassword");
+if (changePasswordBtn) {
+  changePasswordBtn.addEventListener("click", async () => {
+    const currentPassword = $("#currentPassword")?.value || "";
+    const newPassword = $("#newPassword")?.value || "";
+    const confirmPassword = $("#confirmNewPassword")?.value || "";
+    const status = $("#securityStatus");
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      if (status) status.textContent = "Заповни всі три поля пароля.";
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      if (status) status.textContent = "Нові паролі не збігаються.";
+      return;
+    }
+    changePasswordBtn.disabled = true;
+    if (status) status.textContent = "Змінюємо пароль…";
+    try {
+      const res = await apiFetch("/api/auth/change-password", {
+        method: "POST",
+        body: JSON.stringify({ currentPassword, newPassword })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || "password_change_failed");
+      $("#currentPassword").value = "";
+      $("#newPassword").value = "";
+      $("#confirmNewPassword").value = "";
+      if (status) status.textContent = "Пароль змінено ✅ Інші активні сесії завершено.";
+      await loadProfile();
+    } catch (error) {
+      if (status) status.textContent = authErrorText(error.message);
+    } finally {
+      changePasswordBtn.disabled = false;
+    }
+  });
+}
+
+$("#authLogoutAll")?.addEventListener("click", async () => {
+  if (!confirm("Вийти з SafeDeal на всіх пристроях, включно з цим?")) return;
+  const btn = $("#authLogoutAll");
+  const status = $("#securityStatus");
+  btn.disabled = true;
+  if (status) status.textContent = "Завершуємо всі сесії…";
+  try {
+    const res = await apiFetch("/api/auth/logout-all", { method: "POST" });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || "logout_all_failed");
+    if (status) status.textContent = `З усіх пристроїв виконано вихід ✅ Завершено сесій: ${Number(data.sessionsRevoked) || 0}.`;
+    await loadProfile();
+    loadHistory().catch(()=>{});
+  } catch (error) {
+    if (status) status.textContent = authErrorText(error.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("#forgotPassword")?.addEventListener("click", async () => {
+  const email = $("#authEmail")?.value.trim() || "";
+  const status = $("#authStatus");
+  if (!email) {
+    if (status) status.textContent = "Спочатку введи email акаунта.";
+    return;
+  }
+  const btn = $("#forgotPassword");
+  btn.disabled = true;
+  if (status) status.textContent = "Створюємо запит на відновлення…";
+  try {
+    const res = await apiFetch("/api/auth/forgot-password", {
+      method: "POST",
+      body: JSON.stringify({ email })
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || "reset_request_failed");
+    if (status) status.textContent = data.emailDeliveryConfigured
+      ? "Якщо акаунт існує, лист для відновлення надіслано."
+      : "Запит підготовлено ✅ Надсилання листа активуємо після підключення поштового сервісу.";
+  } catch (error) {
+    if (status) status.textContent = authErrorText(error.message);
+  } finally {
+    btn.disabled = false;
   }
 });
 

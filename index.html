@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#07111f">
   <title>SafeDeal — перевіряй перед дією</title>
-  <link rel="stylesheet" href="/style.css?v=6.0">
+  <link rel="stylesheet" href="/style.css?v=6.2">
 </head>
 <body>
   <div class="app-shell">
@@ -251,19 +251,34 @@
             <div id="authGuestBox">
               <div class="auth-fields">
                 <input id="authEmail" class="text-input" type="email" autocomplete="email" maxlength="254" placeholder="Email">
-                <input id="authPassword" class="text-input" type="password" autocomplete="current-password" maxlength="128" placeholder="Пароль (мінімум 8 символів)">
+                <input id="authPassword" class="text-input" type="password" autocomplete="current-password" maxlength="128" placeholder="Пароль (для нового акаунта: 10+ символів, літера + цифра)">
               </div>
               <div class="auth-actions">
                 <button id="authLogin" class="primary">Увійти</button>
                 <button id="authRegister" class="secondary-btn">Створити акаунт</button>
+                <button id="forgotPassword" class="link-btn" type="button">Забув пароль?</button>
               </div>
-              <div id="authStatus" class="profile-status">Для тестової версії підтвердження email поки не потрібне.</div>
+              <div id="authStatus" class="profile-status">Для нового акаунта пароль має мати 10+ символів, літеру та цифру.</div>
             </div>
 
             <div id="authUserBox" class="hidden">
               <div class="account-email" id="accountEmail"></div>
-              <p class="account-sync">Історія та скарги цього акаунта доступні після входу на іншому пристрої.</p>
+              <p class="account-sync">Історія та скарги цього акаунта доступні після входу на іншому пристрої. Активних сесій: <b id="activeSessions">1</b>.</p>
               <button id="authLogout" class="secondary-btn">Вийти з акаунта</button>
+
+              <div class="security-panel">
+                <span class="profile-kicker">БЕЗПЕКА АКАУНТА</span>
+                <div class="security-fields">
+                  <input id="currentPassword" class="text-input" type="password" autocomplete="current-password" maxlength="128" placeholder="Поточний пароль">
+                  <input id="newPassword" class="text-input" type="password" autocomplete="new-password" maxlength="128" placeholder="Новий пароль (10+ символів, літера + цифра)">
+                  <input id="confirmNewPassword" class="text-input" type="password" autocomplete="new-password" maxlength="128" placeholder="Повтори новий пароль">
+                </div>
+                <div class="security-actions">
+                  <button id="changePassword" class="primary">Змінити пароль</button>
+                  <button id="authLogoutAll" class="danger-btn">Вийти з усіх пристроїв</button>
+                </div>
+                <div id="securityStatus" class="profile-status">Після зміни пароля всі інші активні сесії будуть завершені.</div>
+              </div>
             </div>
           </section>
 
@@ -302,6 +317,6 @@
     </nav>
   </div>
 
-  <script src="/app.js?v=6.1"></script>
+  <script src="/app.js?v=6.2"></script>
 </body>
 </html>
