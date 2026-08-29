@@ -185,6 +185,19 @@ $("#runCheck").addEventListener("click", async () => {
               : "Збігів немає")
           : "Тимчасово недоступно";
 
+      const urlHausText =
+        t.urlHausConfigured === false
+          ? "Не підключено"
+          : t.urlHausAuthError
+            ? "Помилка Auth-Key"
+            : !t.urlHausOk
+              ? "Тимчасово недоступно"
+              : t.urlHausMatch
+                ? (t.urlHausUrlStatus === "online" ? "Відомий malware URL (активний)" : "Відомий malware URL")
+                : t.urlHausHostMatch
+                  ? `На хості є malware URL (${t.urlHausHostUrlCount || 1})`
+                  : "Збігів немає";
+
       techGrid.innerHTML = `
         <div class="tech-item"><span>🌐 Домен</span><b>${escapeHtml(t.hostname || "—")}</b></div>
         <div class="tech-item"><span>🔒 Протокол</span><b>${escapeHtml(String(t.protocol || "—").toUpperCase())}</b></div>
@@ -193,6 +206,7 @@ $("#runCheck").addEventListener("click", async () => {
         <div class="tech-item"><span>🛡 Google Web Risk</span><b>${escapeHtml(webRiskText)}</b></div>
         <div class="tech-item"><span>🎣 PhishTank</span><b>${escapeHtml(phishTankText)}</b></div>
         <div class="tech-item"><span>🧨 PhishDestroy</span><b>${escapeHtml(phishDestroyText)}</b></div>
+        <div class="tech-item"><span>🦠 URLhaus</span><b>${escapeHtml(urlHausText)}</b></div>
       `;
 
       factsList.innerHTML = (r.facts || [])

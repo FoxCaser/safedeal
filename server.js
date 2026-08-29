@@ -14,6 +14,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const GOOGLE_WEB_RISK_API_KEY = process.env.GOOGLE_WEB_RISK_API_KEY || "";
 const PHISHTANK_APP_KEY = process.env.PHISHTANK_APP_KEY || "";
+const URLHAUS_AUTH_KEY = process.env.URLHAUS_AUTH_KEY || "";
 const DATABASE_URL = process.env.DATABASE_URL || "";
 
 app.set("trust proxy", 1);
@@ -386,6 +387,105 @@ async function checkPhishTank(url) {
 }
 
 
+
+async function checkUrlHaus(rawUrl, hostname) {
+  if (!URLHAUS_AUTH_KEY) {
+    return { configured: false, ok: false, match: false, hostMatch: false };
+  }
+
+  const doPost = async (endpoint, key, value) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 7000);
+
+    try {
+      const body = new URLSearchParams();
+      body.set(key, value);
+
+      const response = await fetch(`https://urlhaus-api.abuse.ch/v1/${endpoint}/`, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "Auth-Key": URLHAUS_AUTH_KEY,
+          "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+          "Accept": "application/json",
+          "User-Agent": "SafeDeal/1.0"
+        },
+        body: body.toString()
+      });
+
+      if (!response.ok) {
+        return { ok: false, status: response.status, data: null };
+      }
+
+      const data = await response.json();
+      return { ok: true, status: response.status, data };
+    } catch (error) {
+      return { ok: false, error: error.name || "urlhaus_failed", data: null };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  const exact = await doPost("url", "url", rawUrl);
+  if (!exact.ok) {
+    return {
+      configured: true,
+      ok: false,
+      status: exact.status || null,
+      error: exact.error || null,
+      authError: exact.status === 401 || exact.status === 403,
+      match: false,
+      hostMatch: false
+    };
+  }
+
+  const exactStatus = String(exact.data?.query_status || "").toLowerCase();
+  if (exactStatus === "ok") {
+    return {
+      configured: true,
+      ok: true,
+      match: true,
+      hostMatch: false,
+      queryStatus: exactStatus,
+      urlStatus: String(exact.data?.url_status || "").toLowerCase(),
+      threat: String(exact.data?.threat || ""),
+      dateAdded: exact.data?.date_added || null,
+      tags: Array.isArray(exact.data?.tags) ? exact.data.tags.slice(0, 8) : [],
+      reference: exact.data?.urlhaus_reference || null
+    };
+  }
+
+  // If the exact path is unknown, check whether the host itself has malware URLs.
+  // This is scored more cautiously because one compromised/shared host does not
+  // prove that every URL on that host is malicious.
+  const host = await doPost("host", "host", hostname);
+  if (!host.ok) {
+    return {
+      configured: true,
+      ok: true,
+      match: false,
+      hostCheckOk: false,
+      hostMatch: false,
+      queryStatus: exactStatus || "no_results",
+      hostStatus: host.status || null
+    };
+  }
+
+  const hostStatus = String(host.data?.query_status || "").toLowerCase();
+  const hostCount = Number(host.data?.url_count || 0);
+  return {
+    configured: true,
+    ok: true,
+    match: false,
+    hostCheckOk: true,
+    hostMatch: hostStatus === "ok" && hostCount > 0,
+    queryStatus: exactStatus || "no_results",
+    hostQueryStatus: hostStatus,
+    hostUrlCount: Number.isFinite(hostCount) ? hostCount : 0,
+    hostReference: host.data?.urlhaus_reference || null
+  };
+}
+
 async function checkPhishDestroy(hostname) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 6000);
@@ -464,11 +564,12 @@ async function inspectUrl(rawUrl) {
     };
   }
 
-  const [rdap, webRisk, phishTank, phishDestroy] = await Promise.all([
+  const [rdap, webRisk, phishTank, phishDestroy, urlHaus] = await Promise.all([
     lookupRdap(hostname),
     checkGoogleWebRisk(rawUrl),
     checkPhishTank(rawUrl),
-    checkPhishDestroy(hostname)
+    checkPhishDestroy(hostname),
+    checkUrlHaus(rawUrl, hostname)
   ]);
 
   const reasons = [];
@@ -565,6 +666,30 @@ async function inspectUrl(rawUrl) {
     facts.push("PhishDestroy тимчасово не відповів; результат за цим джерелом невідомий");
   }
 
+  if (!urlHaus.configured) {
+    facts.push("URLhaus ще не підключений до SafeDeal");
+  } else if (!urlHaus.ok) {
+    if (urlHaus.authError) {
+      facts.push("URLhaus не прийняв Auth-Key; перевір ключ у Render");
+    } else {
+      facts.push("URLhaus тимчасово не відповів; результат за цим джерелом невідомий");
+    }
+  } else if (urlHaus.match) {
+    const isOnline = urlHaus.urlStatus === "online";
+    points += isOnline ? 78 : 58;
+    reasons.push(
+      isOnline
+        ? "URLhaus має точний активний запис: це посилання відоме як джерело шкідливого ПЗ"
+        : "URLhaus має точний запис про це посилання як джерело шкідливого ПЗ (зараз може бути офлайн)"
+    );
+    if (urlHaus.threat) facts.push(`URLhaus: тип загрози — ${urlHaus.threat}`);
+  } else if (urlHaus.hostMatch) {
+    points += 24;
+    reasons.push(`URLhaus знає ${urlHaus.hostUrlCount || 1} шкідливих URL на цьому хості; точного збігу поточного URL немає`);
+  } else {
+    facts.push("URLhaus не знайшов точного URL або відомих malware-URL на цьому хості");
+  }
+
   const suspiciousHostTokens = [
     "secure-login",
     "verify-account",
@@ -616,7 +741,16 @@ async function inspectUrl(rawUrl) {
       phishDestroyThreat: Boolean(phishDestroy.threat),
       phishDestroyRiskScore: Number(phishDestroy.riskScore || 0),
       phishDestroySeverity: phishDestroy.severity || null,
-      phishDestroyActive: Boolean(phishDestroy.active)
+      phishDestroyActive: Boolean(phishDestroy.active),
+      urlHausConfigured: Boolean(urlHaus.configured),
+      urlHausOk: Boolean(urlHaus.ok),
+      urlHausAuthError: Boolean(urlHaus.authError),
+      urlHausStatus: urlHaus.status || null,
+      urlHausMatch: Boolean(urlHaus.match),
+      urlHausUrlStatus: urlHaus.urlStatus || null,
+      urlHausThreat: urlHaus.threat || null,
+      urlHausHostMatch: Boolean(urlHaus.hostMatch),
+      urlHausHostUrlCount: Number(urlHaus.hostUrlCount || 0)
     }
   };
 }
@@ -895,6 +1029,7 @@ app.get("/api/health", (req, res) => {
     webRiskConfigured: Boolean(GOOGLE_WEB_RISK_API_KEY),
     phishTankEnabled: true,
     phishTankKeyConfigured: Boolean(PHISHTANK_APP_KEY),
+    urlHausConfigured: Boolean(URLHAUS_AUTH_KEY),
     databaseConfigured: Boolean(DATABASE_URL),
     databaseReady
   });
@@ -1026,6 +1161,7 @@ async function start() {
     console.log(`SafeDeal started on port ${PORT}`);
     console.log(`Google Web Risk: ${GOOGLE_WEB_RISK_API_KEY ? "configured" : "not configured"}`);
     console.log(`PhishTank: enabled (${PHISHTANK_APP_KEY ? "API key configured" : "keyless / lower rate limit"})`);
+    console.log(`URLhaus: ${URLHAUS_AUTH_KEY ? "configured" : "not configured"}`);
     console.log(`Database: ${databaseReady ? "ready" : DATABASE_URL ? "configured but unavailable" : "not configured"}`);
   });
 }
