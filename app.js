@@ -527,7 +527,24 @@ $("#runCheck").addEventListener("click", async () => {
     $("#reportId").textContent = r.id;
     $("#scoreValue").textContent = r.score;
     $("#scoreLabel").textContent = r.label;
-    $("#reasonList").innerHTML = r.reasons.map((x) => `<div class="reason">! <span>${escapeHtml(x)}</span></div>`).join("");
+
+    const verdict = r.verdict || {};
+    const verdictBox = $("#verdictBox");
+    const verdictKind = verdict.kind || (r.level === "low" ? "ok" : "warning");
+    verdictBox.className = `verdict-box ${verdictKind}`;
+    $("#verdictIcon").textContent =
+      verdictKind === "danger" ? "!" :
+      verdictKind === "warning" ? "!" :
+      verdictKind === "limited" ? "?" : "✓";
+    $("#verdictTitle").textContent = verdict.title || r.label;
+    $("#verdictText").textContent = verdict.text || "";
+    $("#verdictEvidence").textContent = verdict.evidence || "";
+
+    const reasonIsOnlyNoSignal = r.reasons.length === 1 &&
+      /не знайдено явних типових сигналів/i.test(r.reasons[0]);
+    $("#reasonList").innerHTML = r.reasons.map((x) =>
+      `<div class="reason ${reasonIsOnlyNoSignal ? "reason-ok" : ""}">${reasonIsOnlyNoSignal ? "✓" : "!"} <span>${escapeHtml(x)}</span></div>`
+    ).join("");
     $("#actionList").innerHTML = r.actions.map((x) => `<div class="action">✓ <span>${escapeHtml(x)}</span></div>`).join("");
     $("#disclaimer").textContent = r.disclaimer;
     setScoreVisual(r.score, r.level);
@@ -707,10 +724,16 @@ $("#runCheck").addEventListener("click", async () => {
         : tg.publicPreviewOk
           ? "Публічне прев’ю доступне"
           : "Публічне прев’ю не підтверджено";
+      const postsText = tg.kind === "invite"
+        ? "Недоступні для приватного запрошення"
+        : tg.publicPostsOk
+          ? `Проаналізовано ${tg.recentPostsCount || 0}`
+          : "Не вдалося прочитати";
       const titleText = tg.title ? String(tg.title).slice(0, 120) : "—";
       techGrid.insertAdjacentHTML("afterbegin", `
         <div class="tech-item telegram-tech"><span>✈ Telegram</span><b>${escapeHtml(tg.target || "—")}</b></div>
         <div class="tech-item telegram-tech"><span>👤 Тип</span><b>${escapeHtml(kindMap[tg.kind] || "Акаунт / канал")}</b></div>
+        <div class="tech-item telegram-tech"><span>📰 Публічні пости</span><b>${escapeHtml(postsText)}</b></div>
         <div class="tech-item telegram-tech"><span>👁 Публічне прев’ю</span><b>${escapeHtml(previewText)}</b></div>
         <div class="tech-item telegram-tech"><span>🏷 Назва</span><b>${escapeHtml(titleText)}</b></div>
       `);

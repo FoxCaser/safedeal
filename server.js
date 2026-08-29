@@ -730,6 +730,61 @@ function scoreToLevel(score) {
   return { level: "low", label: "Низький ризик" };
 }
 
+
+function buildHumanVerdict({ score, type, telegram }) {
+  const telegramLimited =
+    type === "contact" &&
+    telegram &&
+    telegram.kind !== "invite" &&
+    !telegram.publicPreviewOk &&
+    !telegram.publicPostsOk;
+
+  const privateInviteLimited = type === "contact" && telegram?.kind === "invite";
+
+  if ((telegramLimited || privateInviteLimited) && score < 26) {
+    return {
+      kind: "limited",
+      title: "Недостатньо даних для точної оцінки",
+      text: "SafeDeal не бачить достатньо публічної інформації про цей Telegram. Завантажте скріншот пропозиції або вставте її текст.",
+      evidence: "Обмежені дані"
+    };
+  }
+
+  if (score >= 76) {
+    return {
+      kind: "danger",
+      title: "Дуже високий ризик",
+      text: "Знайдено кілька сильних сигналів ризику. Не надсилайте гроші, документи, паролі або коди підтвердження.",
+      evidence: telegram?.publicPostsOk ? "Перевірено публічні пости" : "Сильні сигнали"
+    };
+  }
+
+  if (score >= 51) {
+    return {
+      kind: "danger",
+      title: "Високий ризик",
+      text: "Є серйозні підозрілі ознаки. Не поспішайте виконувати інструкції та не переказуйте гроші без незалежної перевірки.",
+      evidence: telegram?.publicPostsOk ? "Перевірено публічні пости" : "Є сильні сигнали"
+    };
+  }
+
+  if (score >= 26) {
+    return {
+      kind: "warning",
+      title: "Є підозрілі ознаки",
+      text: "SafeDeal знайшов сигнали, які потребують додаткової перевірки. Перегляньте причини нижче.",
+      evidence: telegram?.publicPostsOk ? "Перевірено публічні пости" : "Часткова перевірка"
+    };
+  }
+
+  return {
+    kind: "ok",
+    title: "Явних ознак шахрайства не знайдено",
+    text: "У доступних SafeDeal даних немає сильних типових сигналів ризику. Це не гарантія безпеки — перевіряйте факти перед оплатою або передачею даних.",
+    evidence: telegram?.publicPostsOk ? `Перевірено публічні пости: ${telegram.recentPostsCount}` : "Перевірено доступні дані"
+  };
+}
+
 function parseRdapRegistrationDate(rdap) {
   const events = Array.isArray(rdap?.events) ? rdap.events : [];
   const preferredActions = new Set(["registration", "registered", "creation", "created"]);
@@ -1639,6 +1694,11 @@ async function checkPhishDestroy(hostname) {
   }
 }
 
+function isSharedPlatformHost(hostname = "") {
+  const host = String(hostname || "").toLowerCase().replace(/^www\./, "");
+  return ["t.me", "telegram.me", "telegram.dog"].includes(host);
+}
+
 async function inspectUrl(rawUrl) {
   let parsed;
   try {
@@ -1810,12 +1870,16 @@ async function inspectUrl(rawUrl) {
 
   if (phishDestroy.ok) {
     if (phishDestroy.threat) {
-      const severityPoints = phishDestroy.severity === "critical" ? 65
-        : phishDestroy.severity === "high" ? 55
-        : phishDestroy.severity === "medium" ? 35
-        : 25;
-      points += severityPoints;
-      reasons.push(`PhishDestroy позначив домен як загрозу (${phishDestroy.severity || "ризик"})`);
+      if (isSharedPlatformHost(hostname)) {
+        facts.push(`PhishDestroy має доменний сигнал для спільного домену ${hostname}; без точного збігу конкретного Telegram-посилання цей сигнал не додає ризику акаунту`);
+      } else {
+        const severityPoints = phishDestroy.severity === "critical" ? 65
+          : phishDestroy.severity === "high" ? 55
+          : phishDestroy.severity === "medium" ? 35
+          : 25;
+        points += severityPoints;
+        reasons.push(`PhishDestroy позначив домен як загрозу (${phishDestroy.severity || "ризик"})`);
+      }
     } else {
       facts.push("PhishDestroy не знайшов домен у своїх активних списках загроз");
     }
@@ -1841,8 +1905,12 @@ async function inspectUrl(rawUrl) {
     );
     if (urlHaus.threat) facts.push(`URLhaus: тип загрози — ${urlHaus.threat}`);
   } else if (urlHaus.hostMatch) {
-    points += 24;
-    reasons.push(`URLhaus знає ${urlHaus.hostUrlCount || 1} шкідливих URL на цьому хості; точного збігу поточного URL немає`);
+    if (isSharedPlatformHost(hostname)) {
+      facts.push(`URLhaus знає ${urlHaus.hostUrlCount || 1} шкідливих URL на спільному домені ${hostname}, але точного збігу цього посилання немає — це не додає ризику конкретному Telegram-акаунту`);
+    } else {
+      points += 24;
+      reasons.push(`URLhaus знає ${urlHaus.hostUrlCount || 1} шкідливих URL на цьому хості; точного збігу поточного URL немає`);
+    }
   } else {
     facts.push("URLhaus не знайшов точного URL або відомих malware-URL на цьому хості");
   }
@@ -1860,18 +1928,22 @@ async function inspectUrl(rawUrl) {
     const confidenceBonus = Number.isFinite(confidence)
       ? (confidence >= 90 ? 8 : confidence >= 70 ? 4 : 0)
       : 0;
-    const basePoints = threatFox.matchType === "url" ? 68 : 52;
-    points += basePoints + confidenceBonus;
-
     const malwareText = threatFox.item?.malware
       ? `; пов’язано з ${threatFox.item.malware}`
       : "";
     const typeText = threatFox.item?.threatTypeDesc || threatFox.item?.threatType || "відомим IOC";
-    reasons.push(
-      threatFox.matchType === "url"
-        ? `ThreatFox має точний IOC для цього URL (${typeText}${malwareText})`
-        : `ThreatFox має активний IOC для домену ${hostname} (${typeText}${malwareText})`
-    );
+
+    if (threatFox.matchType !== "url" && isSharedPlatformHost(hostname)) {
+      facts.push(`ThreatFox має доменний IOC для спільного домену ${hostname}, але не точний IOC цього Telegram-посилання — доменний збіг не додає ризику конкретному акаунту`);
+    } else {
+      const basePoints = threatFox.matchType === "url" ? 68 : 52;
+      points += basePoints + confidenceBonus;
+      reasons.push(
+        threatFox.matchType === "url"
+          ? `ThreatFox має точний IOC для цього URL (${typeText}${malwareText})`
+          : `ThreatFox має активний IOC для домену ${hostname} (${typeText}${malwareText})`
+      );
+    }
 
     if (Number.isFinite(confidence)) {
       facts.push(`ThreatFox: confidence ${confidence}%`);
@@ -2173,6 +2245,51 @@ function extractTelegramTarget(input = "", allowBare = false) {
   return null;
 }
 
+
+function telegramHtmlToText(fragment = "") {
+  return compactSpaces(
+    decodeHtmlText(
+      String(fragment)
+        .replace(/<br\s*\/?>/gi, "\n")
+        .replace(/<\/p>/gi, "\n")
+        .replace(/<[^>]+>/g, " ")
+    )
+  );
+}
+
+function extractTelegramRecentPosts(html = "") {
+  const posts = [];
+  const source = String(html || "");
+  const pattern = /<div[^>]+class=["'][^"']*tgme_widget_message_text[^"']*["'][^>]*>([\s\S]*?)<\/div>/gi;
+  let match;
+  while ((match = pattern.exec(source)) && posts.length < 20) {
+    const text = telegramHtmlToText(match[1]);
+    if (text && text.length >= 2) posts.push(text.slice(0, 1200));
+  }
+  return [...new Set(posts)];
+}
+
+async function fetchTelegramHtml(url, timeoutMs = 6500) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      redirect: "follow",
+      headers: {
+        "User-Agent": "Mozilla/5.0 SafeDeal/1.0",
+        "Accept": "text/html,application/xhtml+xml"
+      }
+    });
+    const html = (await response.text()).slice(0, 900000);
+    return { ok: response.ok, status: response.status, html, error: null };
+  } catch (error) {
+    return { ok: false, status: null, html: "", error: error.name || "telegram_fetch_failed" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function inspectTelegramPublic(target) {
   if (!target) return null;
 
@@ -2183,6 +2300,10 @@ async function inspectTelegramPublic(target) {
       kind: "invite",
       publicUrl: null,
       publicPreviewOk: false,
+      publicPostsOk: false,
+      recentPostsCount: 0,
+      recentPosts: [],
+      recentPostsText: "",
       status: null,
       title: null,
       description: null,
@@ -2191,60 +2312,44 @@ async function inspectTelegramPublic(target) {
     };
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 6500);
-  try {
-    const response = await fetch(target.publicUrl, {
-      signal: controller.signal,
-      redirect: "follow",
-      headers: {
-        "User-Agent": "Mozilla/5.0 SafeDeal/1.0",
-        "Accept": "text/html,application/xhtml+xml"
-      }
-    });
+  const page = await fetchTelegramHtml(target.publicUrl, 6500);
+  const html = page.html || "";
+  const title = extractHtmlMeta(html, "og:title") ||
+    compactSpaces(decodeHtmlText((html.match(/<title[^>]*>([^<]{1,300})<\/title>/i) || [])[1] || ""));
+  const description = extractHtmlMeta(html, "og:description") || extractHtmlMeta(html, "description");
+  const extra = compactSpaces(decodeHtmlText((html.match(/class=["'][^"']*tgme_page_extra[^"']*["'][^>]*>([\s\S]*?)<\/div>/i) || [])[1] || "")
+    .replace(/<[^>]+>/g, " "));
 
-    const html = (await response.text()).slice(0, 700000);
-    const title = extractHtmlMeta(html, "og:title") ||
-      compactSpaces(decodeHtmlText((html.match(/<title[^>]*>([^<]{1,300})<\/title>/i) || [])[1] || ""));
-    const description = extractHtmlMeta(html, "og:description") || extractHtmlMeta(html, "description");
-    const extra = compactSpaces(decodeHtmlText((html.match(/class=["'][^"']*tgme_page_extra[^"']*["'][^>]*>([\s\S]*?)<\/div>/i) || [])[1] || "")
-      .replace(/<[^>]+>/g, " "));
+  const combined = `${title} ${description} ${extra}`.toLowerCase();
+  let kind = "account_or_channel";
+  if (target.username.endsWith("bot") || /\bbot\b|бот/i.test(combined)) kind = "bot";
+  else if (/\bsubscribers?\b|підписник|подписчик/i.test(combined)) kind = "channel";
+  else if (/\bmembers?\b|учасник|участник/i.test(combined)) kind = "group";
 
-    const combined = `${title} ${description} ${extra}`.toLowerCase();
-    let kind = "account_or_channel";
-    if (target.username.endsWith("bot") || /\bbot\b|бот/i.test(combined)) kind = "bot";
-    else if (/\bsubscribers?\b|підписник|подписчик/i.test(combined)) kind = "channel";
-    else if (/\bmembers?\b|учасник|участник/i.test(combined)) kind = "group";
+  const genericOnly = !description && /^telegram(?::\s*contact)?/i.test(title || "");
+  const publicPreviewOk = page.ok && Boolean(title || description) && !genericOnly;
 
-    const genericOnly = !description && /^telegram(?::\s*contact)?/i.test(title || "");
-    return {
-      target: target.normalized,
-      username: target.username,
-      kind,
-      publicUrl: target.publicUrl,
-      publicPreviewOk: response.ok && Boolean(title || description) && !genericOnly,
-      status: response.status,
-      title: title ? title.slice(0, 180) : null,
-      description: description ? description.slice(0, 700) : null,
-      audienceText: extra ? extra.slice(0, 120) : null,
-      fetchError: null
-    };
-  } catch (error) {
-    return {
-      target: target.normalized,
-      username: target.username,
-      kind: "account_or_channel",
-      publicUrl: target.publicUrl,
-      publicPreviewOk: false,
-      status: null,
-      title: null,
-      description: null,
-      audienceText: null,
-      fetchError: error.name || "telegram_preview_failed"
-    };
-  } finally {
-    clearTimeout(timer);
-  }
+  // Public channel/group stream. This is still only data Telegram exposes publicly.
+  const stream = await fetchTelegramHtml(`https://t.me/s/${encodeURIComponent(target.username)}`, 6000);
+  const recentPosts = stream.ok ? extractTelegramRecentPosts(stream.html) : [];
+  const publicPostsOk = recentPosts.length > 0;
+
+  return {
+    target: target.normalized,
+    username: target.username,
+    kind,
+    publicUrl: target.publicUrl,
+    publicPreviewOk,
+    publicPostsOk,
+    recentPostsCount: recentPosts.length,
+    recentPosts,
+    recentPostsText: recentPosts.join("\n").slice(0, 12000),
+    status: page.status,
+    title: title ? title.slice(0, 180) : null,
+    description: description ? description.slice(0, 900) : null,
+    audienceText: extra ? extra.slice(0, 160) : null,
+    fetchError: page.error || stream.error || null
+  };
 }
 
 function analyzeTelegramSignals(target, preview) {
@@ -2256,26 +2361,30 @@ function analyzeTelegramSignals(target, preview) {
   if (!target) return { points, reasons, facts, actions };
 
   facts.push(`Telegram-ціль: ${target.normalized}`);
-  facts.push("Домен t.me є офіційним доменом Telegram, але це не підтверджує надійність конкретного акаунта чи каналу.");
+  facts.push("t.me є офіційним доменом Telegram, але це не підтверджує надійність конкретного акаунта чи каналу.");
 
   if (target.kind === "invite") {
-    facts.push("Це приватне Telegram-запрошення: публічні дані каналу/групи можуть бути недоступні до вступу.");
+    facts.push("Це приватне Telegram-запрошення: SafeDeal не бачить публічні пости до вступу.");
+    actions.push("Для точнішої перевірки завантажте скріншот пропозиції або вставте її текст.");
     actions.push("Не вступайте в невідомі приватні групи лише заради «верифікації», заробітку або отримання виплати.");
     return { points, reasons, facts, actions };
   }
 
   const username = String(target.username || "").toLowerCase();
-  const previewText = normalizeText(`${preview?.title || ""} ${preview?.description || ""}`);
+  const publicText = normalizeText(
+    `${preview?.title || ""} ${preview?.description || ""} ${preview?.recentPostsText || ""}`
+  );
+
   const brandWords = /(privat|приват|mono|olx|nova|novaposhta|steam|telegram|google|gmail|paypal|binance|bank|банк)/i;
   const supportWords = /(support|help|security|admin|manager|official|verify|verification|service|підтрим|служб|адмін|менедж)/i;
 
   if (brandWords.test(username) && supportWords.test(username)) {
     points += 18;
-    reasons.push("Назва Telegram-акаунта схожа на службову підтримку або представника відомого бренду; офіційність не підтверджена");
-    actions.push("Перейдіть на офіційний сайт бренду й знайдіть Telegram-контакт там, а не через отримане повідомлення.");
+    reasons.push("Назва Telegram-акаунта схожа на підтримку або представника відомого бренду, але офіційність не підтверджена");
+    actions.push("Знайдіть Telegram-контакт через офіційний сайт бренду, а не через отримане повідомлення.");
   }
 
-  if (/(crypto|invest|trade|profit|airdrop|bonus|earn|zarob|work|job|crypto)/i.test(username)) {
+  if (/(crypto|invest|trade|profit|airdrop|bonus|earn|zarob|work|job)/i.test(username)) {
     points += 5;
     reasons.push("Назва Telegram-акаунта пов’язана із заробітком, інвестиціями або бонусами — потрібна додаткова перевірка");
   }
@@ -2283,22 +2392,56 @@ function analyzeTelegramSignals(target, preview) {
   if (preview?.publicPreviewOk) {
     facts.push(`Публічне прев’ю Telegram доступне${preview.title ? `: ${preview.title}` : ""}`);
   } else {
-    facts.push("Публічне прев’ю Telegram не вдалося підтвердити; це не означає ні шахрайство, ні безпечність.");
+    facts.push("Публічне прев’ю Telegram не вдалося підтвердити.");
   }
 
-  if (/seed\s*phrase|private\s*key|recovery\s*phrase|cvv|cvc|sms\s*code|код\s*(з|із)\s*sms|парол/i.test(previewText)) {
+  if (preview?.publicPostsOk) {
+    facts.push(`SafeDeal проаналізував останні публічні повідомлення: ${preview.recentPostsCount}.`);
+  } else {
+    facts.push("Публічні повідомлення каналу не вдалося прочитати; для точнішої оцінки потрібен скріншот або текст пропозиції.");
+  }
+
+  const sensitive = /seed\s*phrase|private\s*key|recovery\s*phrase|cvv|cvc|sms\s*code|код\s*(з|із)\s*sms|парол|pin\b/i;
+  const guaranteed = /гарантован.*(дохід|прибут|зароб)|guaranteed.*profit|100%.*(profit|прибут)|без\s*ризику|безризиков/i;
+  const deposit = /депозит|передоплат|activation fee|активац|внесок|поповн.*баланс|комісі.*для.*(виплат|вивод)|оплат.*щоб.*отрим/i;
+  const task = /став(ити|те|имо)?\s*(лайк|вподоб)|лайк(и|ів)?|підпис(атися|ка|ки)|subscribe|оцін(ити|ювати).*(товар|відео|готел|заклад)|відгук|review|викон(ати|увати)\s*(прост|завдан)|task\b/i;
+  const earning = /зароб|дохід|оплат|виплат|платимо|отрим(ай|уйте|ати).*(\$|usd|дол|грн|uah|євро|eur|грош)|за\s*(день|годину|лайк|завдан)|комісі/i;
+  const highAmountUsd = /(?:\$|usd|дол(?:ар)?(?:ів)?)\s*(?:[1-9]\d{2,}|[5-9]\d)|(?:[1-9]\d{2,}|[5-9]\d)\s*(?:\$|usd|дол(?:ар)?(?:ів)?)/i;
+  const highAmountUah = /(?:[3-9]\d{3}|[1-9]\d{4,})\s*(?:грн|uah)|(?:грн|uah)\s*(?:[3-9]\d{3}|[1-9]\d{4,})/i;
+  const urgency = /терміново|прямо\s*зараз|лише\s*сьогодні|тільки\s*сьогодні|залишилось.*місц|limited\s*time/i;
+
+  if (sensitive.test(publicText)) {
+    points += 40;
+    reasons.push("У публічних матеріалах є запит або згадка критично чутливих даних: пароль, SMS-код, PIN/CVV або ключі доступу");
+    actions.push("Не передавайте паролі, SMS-коди, PIN, CVV або ключі від криптогаманця.");
+  }
+
+  if (guaranteed.test(publicText)) {
+    points += 24;
+    reasons.push("У публічних матеріалах є нереалістична або гарантована обіцянка прибутку");
+  }
+
+  const looksLikeTaskJob = task.test(publicText) && earning.test(publicText);
+  if (looksLikeTaskJob) {
     points += 38;
-    reasons.push("У публічному описі Telegram є запит або згадка критично чутливих даних");
+    reasons.push("Публічні повідомлення схожі на схему «просте завдання за гроші» — лайки, підписки, оцінки або відгуки за оплату");
+    actions.push("Не вносьте власні кошти для продовження «завдань» або збільшення виплати.");
   }
 
-  if (/гарантован.*(дохід|прибут)|guaranteed.*profit|x\s?2|подвоїмо|100%.*profit|безризиков/i.test(previewText)) {
+  if (looksLikeTaskJob && (highAmountUsd.test(publicText) || highAmountUah.test(publicText))) {
     points += 22;
-    reasons.push("Публічний опис Telegram містить нереалістичні або гарантовані обіцянки прибутку");
+    reasons.push("За дуже прості дії обіцяють непропорційно високу оплату — це сильний сигнал ризику");
   }
 
-  if (/депозит|передоплат|activation fee|активац|внесок|поповн.*баланс/i.test(previewText)) {
-    points += 18;
-    reasons.push("У публічному описі Telegram є ознаки вимоги депозиту або платної активації");
+  if (deposit.test(publicText)) {
+    points += 30;
+    reasons.push("Є ознаки вимоги депозиту, передоплати, платної активації або поповнення балансу");
+    actions.push("Не сплачуйте «активацію», «депозит», «податок», «страховку» чи «комісію для отримання виплати».");
+  }
+
+  if (urgency.test(publicText)) {
+    points += 8;
+    reasons.push("Використовується тиск або штучна терміновість");
   }
 
   return { points, reasons, facts, actions };
@@ -2306,7 +2449,8 @@ function analyzeTelegramSignals(target, preview) {
 
 function analyzeTextSignals(type, input) {
   const text = normalizeText(input);
-  let score = 8;
+  // Risk score is evidence-based: no detected signal starts at 0, not an arbitrary baseline.
+  let score = 0;
   const reasons = [];
   const actions = new Set([
     "Не надсилайте паролі, PIN, CVV або коди з SMS.",
@@ -2512,6 +2656,7 @@ async function analyzeInput(type, input) {
 
   score = Math.max(0, Math.min(100, score));
   const { level, label } = scoreToLevel(score);
+  const verdict = buildHumanVerdict({ score, type: safeType, telegram });
 
   if (!reasons.length) {
     reasons.push(
@@ -2525,6 +2670,7 @@ async function analyzeInput(type, input) {
     score,
     level,
     label,
+    verdict,
     reasons: [...new Set(reasons)],
     facts: [...new Set(facts)],
     actions: [...actions],
@@ -2535,6 +2681,8 @@ async function analyzeInput(type, input) {
       kind: telegram.kind,
       publicUrl: telegram.publicUrl,
       publicPreviewOk: telegram.publicPreviewOk,
+      publicPostsOk: telegram.publicPostsOk,
+      recentPostsCount: telegram.recentPostsCount,
       status: telegram.status,
       title: telegram.title,
       description: telegram.description,

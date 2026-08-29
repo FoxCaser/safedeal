@@ -114,6 +114,17 @@
             <span class="chip" id="reportId"></span>
           </div>
 
+          <div class="verdict-box" id="verdictBox">
+            <div class="verdict-icon" id="verdictIcon">✓</div>
+            <div>
+              <div class="verdict-head">
+                <h4 id="verdictTitle">—</h4>
+                <span id="verdictEvidence">—</span>
+              </div>
+              <p id="verdictText"></p>
+            </div>
+          </div>
+
           <div class="result-grid">
             <div class="score-column">
               <div class="score-ring" id="scoreRing">
@@ -122,19 +133,19 @@
               <b id="scoreLabel">—</b>
             </div>
             <div>
-              <h4>Чому такий ризик:</h4>
+              <h4>Що знайшов SafeDeal:</h4>
               <div class="reason-list" id="reasonList"></div>
             </div>
           </div>
 
-          <div class="technical-box hidden" id="technicalBox">
-            <div class="technical-head">
-              <h4>Технічна перевірка</h4>
+          <details class="technical-box hidden" id="technicalBox">
+            <summary class="technical-head">
+              <h4>Показати технічні деталі</h4>
               <span id="techStatus">LIVE</span>
-            </div>
+            </summary>
             <div class="technical-grid" id="technicalGrid"></div>
             <div class="facts-list" id="factsList"></div>
-          </div>
+          </details>
 
           <div class="advice-box">
             <h4>Що робити:</h4>
@@ -322,6 +333,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js" defer></script>
-  <script src="/app.js?v=6.4" defer></script>
+  <script src="/app.js?v=6.4.2" defer></script>
 </body>
 </html>
