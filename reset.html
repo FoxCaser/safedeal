@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Новий пароль — SafeDeal</title>
+  <style>
+    :root{--bg:#07111f;--panel:#0d1a2b;--line:#20334c;--text:#f6f9ff;--muted:#8ea2bc;--blue:#2587ff;--purple:#6947f8;--danger:#ff7b84;--green:#37d98f}
+    *{box-sizing:border-box} body{margin:0;min-height:100vh;display:grid;place-items:center;padding:18px;color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif;background:radial-gradient(circle at 70% 0%,rgba(37,135,255,.15),transparent 34%),var(--bg)}
+    .card{width:min(520px,100%);border:1px solid var(--line);border-radius:22px;background:linear-gradient(180deg,rgba(17,31,50,.97),rgba(9,19,33,.98));padding:26px;box-shadow:0 24px 70px rgba(0,0,0,.28)}
+    .brand{display:flex;align-items:center;gap:10px;margin-bottom:22px}.mark{width:42px;height:46px;display:grid;place-items:center;font-weight:900;background:linear-gradient(145deg,#23b5ff,#6247ff);clip-path:polygon(50% 0,92% 15%,82% 76%,50% 100%,18% 76%,8% 15%)}
+    h1{font-size:28px;margin:0 0 8px} p{color:var(--muted);line-height:1.55}.fields{display:grid;gap:10px;margin:20px 0 12px} input{width:100%;padding:13px 14px;border-radius:11px;border:1px solid var(--line);background:#081524;color:#fff;outline:none;font:inherit}input:focus{border-color:#3d78ff}
+    button,a.button{width:100%;border:0;border-radius:11px;padding:13px 16px;font-weight:850;color:white;background:linear-gradient(135deg,#1688ff,#6844f8);font:inherit;cursor:pointer;text-decoration:none;display:block;text-align:center}.status{min-height:22px;margin-top:12px;font-size:13px;color:var(--muted)}.status.good{color:var(--green)}.status.bad{color:var(--danger)}.hidden{display:none}.small{font-size:12px}
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="brand"><div class="mark">S</div><div><b>SafeDeal</b><div class="small" style="color:var(--muted)">Account security</div></div></div>
+    <section id="resetForm">
+      <h1>Створи новий пароль</h1>
+      <p>Посилання для відновлення діє 30 хвилин і використовується лише один раз.</p>
+      <div class="fields">
+        <input id="newPassword" type="password" autocomplete="new-password" maxlength="128" placeholder="Новий пароль (10+ символів, літера + цифра)">
+        <input id="confirmPassword" type="password" autocomplete="new-password" maxlength="128" placeholder="Повтори новий пароль">
+      </div>
+      <button id="resetBtn" type="button">Змінити пароль</button>
+      <div id="status" class="status"></div>
+    </section>
+    <section id="done" class="hidden">
+      <h1>Пароль змінено ✅</h1>
+      <p id="doneCopy">Старі активні сесії завершено. На цьому пристрої ви вже увійшли в SafeDeal.</p>
+      <a class="button" href="/?page=profile">Відкрити SafeDeal</a>
+    </section>
+  </main>
+  <script>
+    const qs = new URLSearchParams(location.search);
+    const token = qs.get("token") || "";
+    const status = document.getElementById("status");
+    const btn = document.getElementById("resetBtn");
+    const setStatus = (text, type="") => { status.textContent=text; status.className=`status ${type}`; };
+    const errorText = (code) => ({
+      reset_invalid_or_expired:"Посилання недійсне або вже прострочене. Запроси новий лист у профілі SafeDeal.",
+      weak_new_password:"Пароль має містити 10–128 символів, щонайменше одну літеру та одну цифру.",
+      password_unchanged:"Новий пароль має відрізнятися від попереднього.",
+      rate_limited:"Забагато спроб. Спробуй трохи пізніше.",
+      database_unavailable:"База даних тимчасово недоступна. Спробуй пізніше."
+    }[code] || "Не вдалося змінити пароль. Спробуй ще раз.");
+
+    if (!/^[A-Za-z0-9_-]{32,120}$/.test(token)) {
+      btn.disabled = true;
+      setStatus("Посилання для відновлення некоректне. Запроси нове в SafeDeal.", "bad");
+    }
+
+    btn.addEventListener("click", async () => {
+      const newPassword = document.getElementById("newPassword").value;
+      const confirmPassword = document.getElementById("confirmPassword").value;
+      if (newPassword !== confirmPassword) return setStatus("Паролі не збігаються.", "bad");
+      if (newPassword.length < 10 || !/[A-Za-zА-Яа-яІіЇїЄє]/.test(newPassword) || !/\d/.test(newPassword)) return setStatus("Пароль має містити 10+ символів, літеру та цифру.", "bad");
+      btn.disabled = true; setStatus("Змінюємо пароль…");
+      try {
+        const res = await fetch("/api/auth/reset-password", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token,newPassword})});
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error || "password_reset_failed");
+        history.replaceState({}, "", "/reset-password");
+        document.getElementById("resetForm").classList.add("hidden");
+        document.getElementById("done").classList.remove("hidden");
+        if (!data.signedIn) document.getElementById("doneCopy").textContent = "Пароль змінено, а старі активні сесії завершено. Увійди в SafeDeal новим паролем.";
+      } catch (e) {
+        setStatus(errorText(e.message), "bad");
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

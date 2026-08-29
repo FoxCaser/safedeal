@@ -23,6 +23,9 @@ const URLHAUS_AUTH_KEY = process.env.URLHAUS_AUTH_KEY || "";
 const ABUSECH_AUTH_KEY = process.env.ABUSECH_AUTH_KEY || URLHAUS_AUTH_KEY;
 const DATABASE_URL = process.env.DATABASE_URL || "";
 const ADMIN_KEY = process.env.ADMIN_KEY || "";
+const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
+const RESEND_FROM = process.env.RESEND_FROM || "SafeDeal <onboarding@resend.dev>";
+const APP_BASE_URL = String(process.env.APP_BASE_URL || "https://safedeal-sqlg.onrender.com").replace(/\/+$/, "");
 
 app.set("trust proxy", 1);
 app.use(helmet({ contentSecurityPolicy: false }));
@@ -302,6 +305,51 @@ async function createAuthSession(res, userId) {
     [tokenHash, userId]
   );
   setSessionCookie(res, token);
+}
+
+async function sendPasswordResetEmail(email, resetToken) {
+  if (!RESEND_API_KEY) return false;
+
+  const resetUrl = new URL("/reset-password", APP_BASE_URL);
+  resetUrl.searchParams.set("token", resetToken);
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${RESEND_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        from: RESEND_FROM,
+        to: [email],
+        subject: "Відновлення пароля SafeDeal",
+        text: `Хтось запросив зміну пароля SafeDeal. Посилання діє 30 хвилин: ${resetUrl.toString()}\n\nЯкщо це були не ви — просто проігноруйте цей лист.`,
+        html: `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;color:#0b1727">
+          <h2>Відновлення пароля SafeDeal</h2>
+          <p>Ми отримали запит на зміну пароля вашого акаунта.</p>
+          <p><a href="${resetUrl.toString()}" style="display:inline-block;padding:12px 18px;background:#2587ff;color:#fff;text-decoration:none;border-radius:10px;font-weight:700">Створити новий пароль</a></p>
+          <p>Посилання дійсне 30 хвилин і може бути використане лише один раз.</p>
+          <p style="color:#667085;font-size:13px">Якщо ви не надсилали цей запит — просто проігноруйте лист.</p>
+        </div>`
+      }),
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      console.error("Password reset email failed:", response.status, body.slice(0, 180));
+      return false;
+    }
+    return true;
+  } catch (error) {
+    console.error("Password reset email failed:", error.name === "AbortError" ? "timeout" : error.message);
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function attachAnonymousDataToUser(userId, clientId) {
@@ -2343,6 +2391,8 @@ app.get("/api/health", (req, res) => {
     databaseReady,
     accountAuthReady: databaseReady,
     accountSecurityV62: databaseReady,
+    passwordResetV63: databaseReady,
+    passwordResetEmailConfigured: Boolean(RESEND_API_KEY),
     adminConfigured: Boolean(ADMIN_KEY)
   });
 });
@@ -2518,6 +2568,7 @@ app.post("/api/auth/forgot-password", rateLimit({ windowMs: 60 * 60 * 1000, max:
   if (!databaseReady || !pool) return res.status(503).json({ ok: false, error: "database_unavailable" });
   const email = normalizeEmail(req.body?.email || "");
   if (!validEmail(email)) return res.status(400).json({ ok: false, error: "invalid_email" });
+
   try {
     const { rows } = await pool.query(`SELECT id FROM users WHERE email = $1 LIMIT 1`, [email]);
     if (rows.length) {
@@ -2529,12 +2580,77 @@ app.post("/api/auth/forgot-password", rateLimit({ windowMs: 60 * 60 * 1000, max:
          VALUES ($1, $2, $3, NOW() + INTERVAL '30 minutes')`,
         [crypto.randomUUID(), rows[0].id, tokenHash]
       );
-      // Token is intentionally not returned or logged. An email provider will deliver it in a later version.
+
+      // Never return or log the reset token. Email delivery is best-effort.
+      if (RESEND_API_KEY) await sendPasswordResetEmail(email, token);
     }
-    res.json({ ok: true, accepted: true, emailDeliveryConfigured: false });
+
+    // Always give the same response so callers cannot discover registered emails.
+    res.json({ ok: true, accepted: true, emailDeliveryConfigured: Boolean(RESEND_API_KEY) });
   } catch (error) {
     console.error("Forgot password error:", error.message);
     res.status(500).json({ ok: false, error: "reset_request_failed" });
+  }
+});
+
+app.post("/api/auth/reset-password", rateLimit({ windowMs: 60 * 60 * 1000, max: 10 }), async (req, res) => {
+  if (!databaseReady || !pool) return res.status(503).json({ ok: false, error: "database_unavailable" });
+
+  const token = String(req.body?.token || "").trim();
+  const newPassword = String(req.body?.newPassword || "");
+  if (!/^[A-Za-z0-9_-]{32,120}$/.test(token)) return res.status(400).json({ ok: false, error: "reset_invalid_or_expired" });
+  if (!validNewPassword(newPassword)) return res.status(400).json({ ok: false, error: "weak_new_password" });
+
+  const tokenHash = sessionTokenHash(token);
+  const client = await pool.connect();
+  let userId = null;
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query(
+      `SELECT r.id, r.user_id, u.password_hash
+       FROM password_reset_requests r
+       JOIN users u ON u.id = r.user_id
+       WHERE r.token_hash = $1 AND r.used_at IS NULL AND r.expires_at > NOW()
+       LIMIT 1 FOR UPDATE OF r`,
+      [tokenHash]
+    );
+
+    if (!rows.length) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ ok: false, error: "reset_invalid_or_expired" });
+    }
+
+    userId = rows[0].user_id;
+    if (await verifyPassword(newPassword, rows[0].password_hash)) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ ok: false, error: "password_unchanged" });
+    }
+
+    const passwordHash = await createPasswordHash(newPassword);
+    await client.query(
+      `UPDATE users
+       SET password_hash = $1, password_changed_at = NOW(), failed_login_count = 0,
+           login_locked_until = NULL, updated_at = NOW()
+       WHERE id = $2`,
+      [passwordHash, userId]
+    );
+    await client.query(`UPDATE password_reset_requests SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL`, [userId]);
+    await client.query(`DELETE FROM auth_sessions WHERE user_id = $1`, [userId]);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("Reset password error:", error.message);
+    return res.status(500).json({ ok: false, error: "password_reset_failed" });
+  } finally {
+    client.release();
+  }
+
+  try {
+    await createAuthSession(res, userId);
+    res.json({ ok: true, passwordReset: true, signedIn: true });
+  } catch (error) {
+    console.error("Reset session creation failed:", error.message);
+    res.json({ ok: true, passwordReset: true, signedIn: false });
   }
 });
 
@@ -2816,6 +2932,11 @@ app.patch("/api/admin/reports/:code", requireAdmin, rateLimit({ max: 240 }), asy
   }
 });
 
+app.get("/reset-password", (req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.sendFile(path.join(__dirname, "reset.html"));
+});
+
 app.get("/admin", (req, res) => {
   res.set("Cache-Control", "no-store");
   res.sendFile(path.join(__dirname, "admin.html"));
@@ -2867,6 +2988,7 @@ async function start() {
     console.log(`ThreatFox: ${ABUSECH_AUTH_KEY ? "configured" : "not configured"}`);
     console.log(`Database: ${databaseReady ? "ready" : DATABASE_URL ? "configured but unavailable" : "not configured"}`);
     console.log(`Admin moderation: ${ADMIN_KEY ? "configured" : "not configured"}`);
+    console.log(`Password reset email: ${RESEND_API_KEY ? "configured" : "not configured"}`);
   });
 }
 
