@@ -236,9 +236,36 @@
 
       <section class="page" id="profile">
         <article class="empty-panel profile-page">
-          <span class="eyebrow">PROFILE BETA</span>
+          <span class="eyebrow">SAFEDEAL ACCOUNT</span>
           <h2>Профіль SafeDeal</h2>
-          <p class="profile-copy">Поки це профіль цього браузера: перевірки та скарги зберігаються в PostgreSQL. Вхід через email і синхронізацію між пристроями додамо наступним етапом.</p>
+          <p class="profile-copy" id="profileCopy">Зараз це профіль цього браузера. Створи акаунт або увійди через email, щоб синхронізувати історію між телефоном і комп’ютером.</p>
+
+          <section class="profile-card auth-card">
+            <div class="auth-title-row">
+              <div>
+                <span class="profile-kicker">АКАУНТ</span>
+                <h3 id="accountBadge">Гостьовий профіль</h3>
+              </div>
+            </div>
+
+            <div id="authGuestBox">
+              <div class="auth-fields">
+                <input id="authEmail" class="text-input" type="email" autocomplete="email" maxlength="254" placeholder="Email">
+                <input id="authPassword" class="text-input" type="password" autocomplete="current-password" maxlength="128" placeholder="Пароль (мінімум 8 символів)">
+              </div>
+              <div class="auth-actions">
+                <button id="authLogin" class="primary">Увійти</button>
+                <button id="authRegister" class="secondary-btn">Створити акаунт</button>
+              </div>
+              <div id="authStatus" class="profile-status">Для тестової версії підтвердження email поки не потрібне.</div>
+            </div>
+
+            <div id="authUserBox" class="hidden">
+              <div class="account-email" id="accountEmail"></div>
+              <p class="account-sync">Історія та скарги цього акаунта доступні після входу на іншому пристрої.</p>
+              <button id="authLogout" class="secondary-btn">Вийти з акаунта</button>
+            </div>
+          </section>
 
           <div class="profile-grid">
             <section class="profile-card">
@@ -275,6 +302,6 @@
     </nav>
   </div>
 
-  <script src="/app.js?v=6.0"></script>
+  <script src="/app.js?v=6.1"></script>
 </body>
 </html>

@@ -366,3 +366,19 @@ textarea:focus{border-color:#3d78ff}.privacy-note{margin:10px 0;padding:10px 12p
   .profile-edit-row{grid-template-columns:1fr}
   .profile-edit-row .primary{width:100%}
 }
+
+
+/* SafeDeal v6.1: email account + cross-device sync */
+.auth-card{margin-top:18px}
+.auth-title-row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
+.auth-title-row h3{margin:0;color:#f1f7ff;font-size:20px}
+.auth-fields{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.auth-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+.auth-actions .primary,.auth-actions .secondary-btn{min-width:150px}
+.account-email{font-size:18px;font-weight:800;color:#eaf5ff;word-break:break-word;margin-bottom:8px}
+.account-sync{color:var(--muted);font-size:11px;line-height:1.55;margin:0 0 14px}
+@media(max-width:620px){
+  .auth-fields{grid-template-columns:1fr}
+  .auth-actions{display:grid;grid-template-columns:1fr}
+  .auth-actions .primary,.auth-actions .secondary-btn{width:100%;min-width:0}
+}

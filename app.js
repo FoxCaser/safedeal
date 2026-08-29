@@ -39,7 +39,7 @@ async function apiFetch(url, options = {}) {
   const headers = new Headers(options.headers || {});
   headers.set("x-client-id", getClientId());
   if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
-  return fetch(url, { ...options, headers });
+  return fetch(url, { ...options, headers, credentials: "same-origin" });
 }
 
 function showPage(id) {
@@ -165,7 +165,9 @@ async function loadHistory() {
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || "history_failed");
     renderHistoryItems(data.items || [], "cloud");
-    if (sync) sync.textContent = "Історія зберігається в PostgreSQL для цього браузера.";
+    if (sync) sync.textContent = data.syncedAcrossDevices
+      ? "Історія синхронізується через акаунт між пристроями ✅"
+      : "Історія зберігається в PostgreSQL для цього браузера.";
   } catch (e) {
     renderHistoryItems(getLocalHistory(), "local");
     if (sync) sync.textContent = "База тимчасово недоступна — показано локальну історію цього пристрою.";
@@ -204,6 +206,32 @@ if (historyList) {
   });
 }
 
+function renderAccount(account = {}) {
+  const loggedIn = Boolean(account.authenticated);
+  const guestBox = $("#authGuestBox");
+  const userBox = $("#authUserBox");
+  if (guestBox) guestBox.classList.toggle("hidden", loggedIn);
+  if (userBox) userBox.classList.toggle("hidden", !loggedIn);
+  if ($("#accountEmail")) $("#accountEmail").textContent = loggedIn ? (account.email || "") : "";
+  if ($("#accountBadge")) $("#accountBadge").textContent = loggedIn ? "Синхронізація активна" : "Гостьовий профіль";
+  const copy = $("#profileCopy");
+  if (copy) copy.textContent = loggedIn
+    ? "Ти увійшов у SafeDeal. Історія перевірок і скарги синхронізуються між пристроями через PostgreSQL."
+    : "Зараз це профіль цього браузера. Створи акаунт або увійди через email, щоб синхронізувати історію між телефоном і комп’ютером.";
+}
+
+function authErrorText(code) {
+  const map = {
+    invalid_email: "Введи правильну email-адресу.",
+    weak_password: "Пароль має містити щонайменше 8 символів.",
+    email_exists: "Акаунт з таким email уже існує. Натисни «Увійти».",
+    invalid_credentials: "Неправильний email або пароль.",
+    rate_limited: "Забагато спроб. Спробуй трохи пізніше.",
+    database_unavailable: "База даних тимчасово недоступна."
+  };
+  return map[code] || "Не вдалося виконати дію. Спробуй ще раз.";
+}
+
 async function loadProfile() {
   const status = $("#profileStatus");
   if (status) status.textContent = "Завантажуємо профіль…";
@@ -212,6 +240,7 @@ async function loadProfile() {
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || "profile_failed");
     const p = data.profile || {};
+    renderAccount(data.account || {});
     if ($("#profileNickname")) $("#profileNickname").value = p.nickname || "Гість";
     if ($("#profileChecks")) $("#profileChecks").textContent = Number(p.check_count) || 0;
     if ($("#profileReports")) $("#profileReports").textContent = Number(p.report_count) || 0;
@@ -221,11 +250,62 @@ async function loadProfile() {
       const d = new Date(p.created_at);
       $("#profileSince").textContent = Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString("uk-UA");
     }
-    if (status) status.textContent = "Профіль активний. Дані прив’язані до цього браузера.";
+    if (status) status.textContent = data.account?.authenticated
+      ? "Акаунт активний. Дані синхронізуються між пристроями ✅"
+      : "Гостьовий профіль активний. Дані поки прив’язані до цього браузера.";
   } catch (e) {
     if (status) status.textContent = "Не вдалося завантажити профіль з бази.";
   }
 }
+
+async function runAuth(mode) {
+  const email = $("#authEmail")?.value.trim() || "";
+  const password = $("#authPassword")?.value || "";
+  const authStatus = $("#authStatus");
+  const loginBtn = $("#authLogin");
+  const registerBtn = $("#authRegister");
+  if (!email || !password) {
+    if (authStatus) authStatus.textContent = "Введи email і пароль.";
+    return;
+  }
+  if (loginBtn) loginBtn.disabled = true;
+  if (registerBtn) registerBtn.disabled = true;
+  if (authStatus) authStatus.textContent = mode === "register" ? "Створюємо акаунт…" : "Входимо…";
+  try {
+    const nickname = $("#profileNickname")?.value.trim() || "Гість";
+    const res = await apiFetch(`/api/auth/${mode}`, {
+      method: "POST",
+      body: JSON.stringify({ email, password, nickname })
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || "auth_failed");
+    if ($("#authPassword")) $("#authPassword").value = "";
+    if (authStatus) authStatus.textContent = mode === "register" ? "Акаунт створено ✅" : "Вхід успішний ✅";
+    await loadProfile();
+    loadHistory().catch(()=>{});
+  } catch (error) {
+    if (authStatus) authStatus.textContent = authErrorText(error.message);
+  } finally {
+    if (loginBtn) loginBtn.disabled = false;
+    if (registerBtn) registerBtn.disabled = false;
+  }
+}
+
+$("#authLogin")?.addEventListener("click", () => runAuth("login"));
+$("#authRegister")?.addEventListener("click", () => runAuth("register"));
+$("#authPassword")?.addEventListener("keydown", (e) => { if (e.key === "Enter") runAuth("login"); });
+$("#authLogout")?.addEventListener("click", async () => {
+  const btn = $("#authLogout");
+  if (btn) btn.disabled = true;
+  try {
+    await apiFetch("/api/auth/logout", { method: "POST" });
+    if ($("#authStatus")) $("#authStatus").textContent = "Ви вийшли з акаунта.";
+    await loadProfile();
+    loadHistory().catch(()=>{});
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
 
 const saveProfileBtn = $("#saveProfile");
 if (saveProfileBtn) {

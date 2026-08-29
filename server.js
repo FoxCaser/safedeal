@@ -133,6 +133,33 @@ async function initDatabase() {
     `);
 
     await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id UUID PRIMARY KEY,
+        email TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        nickname TEXT NOT NULL DEFAULT 'Гість',
+        email_verified BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_login_at TIMESTAMPTZ
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS auth_sessions (
+        token_hash TEXT PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        expires_at TIMESTAMPTZ NOT NULL
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at)`);
+
+    await pool.query(`ALTER TABLE community_reports ADD COLUMN IF NOT EXISTS submitter_user_id UUID`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_reports_submitter_user ON community_reports(submitter_user_id)`);
+
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS check_history (
         id BIGSERIAL PRIMARY KEY,
         client_id TEXT NOT NULL REFERENCES client_profiles(client_id) ON DELETE CASCADE,
@@ -147,7 +174,10 @@ async function initDatabase() {
         UNIQUE(client_id, report_id)
       )
     `);
+    await pool.query(`ALTER TABLE check_history ADD COLUMN IF NOT EXISTS user_id UUID`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_check_history_client_created ON check_history(client_id, created_at DESC)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_check_history_user_created ON check_history(user_id, created_at DESC)`);
+    await pool.query(`DELETE FROM auth_sessions WHERE expires_at <= NOW()`);
     databaseReady = true;
     console.log("Database: connected");
   } catch (error) {
@@ -169,6 +199,95 @@ function getClientId(req) {
   return /^[a-zA-Z0-9_-]{12,80}$/.test(value) ? value : "";
 }
 
+function normalizeEmail(value = "") {
+  return String(value).trim().toLowerCase().slice(0, 254);
+}
+
+function validEmail(value = "") {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) && value.length <= 254;
+}
+
+function parseCookies(req) {
+  const header = String(req.headers.cookie || "");
+  const out = {};
+  for (const part of header.split(";")) {
+    const i = part.indexOf("=");
+    if (i < 1) continue;
+    const key = part.slice(0, i).trim();
+    const value = part.slice(i + 1).trim();
+    try { out[key] = decodeURIComponent(value); } catch { out[key] = value; }
+  }
+  return out;
+}
+
+function sessionTokenHash(token) {
+  return crypto.createHash("sha256").update(String(token)).digest("hex");
+}
+
+function scryptAsync(password, salt) {
+  return new Promise((resolve, reject) => {
+    crypto.scrypt(password, salt, 64, (error, derivedKey) => {
+      if (error) reject(error); else resolve(derivedKey);
+    });
+  });
+}
+
+async function createPasswordHash(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = await scryptAsync(password, salt);
+  return `scrypt$${salt}$${hash.toString("hex")}`;
+}
+
+async function verifyPassword(password, stored) {
+  const parts = String(stored || "").split("$");
+  if (parts.length !== 3 || parts[0] !== "scrypt") return false;
+  const expected = Buffer.from(parts[2], "hex");
+  if (!expected.length) return false;
+  const actual = await scryptAsync(password, parts[1]);
+  return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+}
+
+function setSessionCookie(res, token) {
+  const maxAge = 30 * 24 * 60 * 60;
+  res.setHeader("Set-Cookie", `sd_session=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`);
+}
+
+function clearSessionCookie(res) {
+  res.setHeader("Set-Cookie", "sd_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0");
+}
+
+async function getAuthUser(req) {
+  if (!databaseReady || !pool) return null;
+  const token = parseCookies(req).sd_session || "";
+  if (!token || token.length > 200) return null;
+  const tokenHash = sessionTokenHash(token);
+  const { rows } = await pool.query(
+    `SELECT u.id, u.email, u.nickname, u.email_verified, u.created_at
+     FROM auth_sessions s JOIN users u ON u.id = s.user_id
+     WHERE s.token_hash = $1 AND s.expires_at > NOW() LIMIT 1`,
+    [tokenHash]
+  );
+  return rows[0] || null;
+}
+
+async function createAuthSession(res, userId) {
+  const token = crypto.randomBytes(32).toString("base64url");
+  const tokenHash = sessionTokenHash(token);
+  await pool.query(
+    `INSERT INTO auth_sessions (token_hash, user_id, expires_at)
+     VALUES ($1, $2, NOW() + INTERVAL '30 days')`,
+    [tokenHash, userId]
+  );
+  setSessionCookie(res, token);
+}
+
+async function attachAnonymousDataToUser(userId, clientId) {
+  if (!databaseReady || !pool || !userId || !clientId) return;
+  await ensureClientProfile(clientId);
+  await pool.query(`UPDATE check_history SET user_id = $1 WHERE client_id = $2 AND user_id IS NULL`, [userId, clientId]);
+  await pool.query(`UPDATE community_reports SET submitter_user_id = $1 WHERE submitter_client_id = $2 AND submitter_user_id IS NULL`, [userId, clientId]);
+}
+
 async function ensureClientProfile(clientId) {
   if (!databaseReady || !pool || !clientId) return false;
   await pool.query(
@@ -179,16 +298,17 @@ async function ensureClientProfile(clientId) {
   return true;
 }
 
-async function saveCheckHistory(clientId, report, input) {
+async function saveCheckHistory(clientId, userId, report, input) {
   if (!databaseReady || !pool || !clientId || !report) return false;
   await ensureClientProfile(clientId);
   await pool.query(
     `INSERT INTO check_history
-      (client_id, report_id, type, input_preview, score, level, label, reasons)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
-     ON CONFLICT (client_id, report_id) DO NOTHING`,
+      (client_id, user_id, report_id, type, input_preview, score, level, label, reasons)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
+     ON CONFLICT (client_id, report_id) DO UPDATE SET user_id = COALESCE(check_history.user_id, EXCLUDED.user_id)`,
     [
       clientId,
+      userId || null,
       String(report.id || `R-${Date.now()}`).slice(0, 80),
       String(report.type || "seller").slice(0, 24),
       compactSpaces(input || "").slice(0, 500),
@@ -2198,12 +2318,91 @@ app.get("/api/health", (req, res) => {
     threatFoxConfigured: Boolean(ABUSECH_AUTH_KEY),
     databaseConfigured: Boolean(DATABASE_URL),
     databaseReady,
+    accountAuthReady: databaseReady,
     adminConfigured: Boolean(ADMIN_KEY)
   });
 });
 
 app.get("/api/community-alerts", (req, res) => {
   res.json({ ok: true, items: demoAlerts, demo: true });
+});
+
+app.get("/api/auth/me", rateLimit({ max: 240 }), async (req, res) => {
+  try {
+    const user = await getAuthUser(req);
+    res.json({ ok: true, authenticated: Boolean(user), user: user ? { id: user.id, email: user.email, nickname: user.nickname, emailVerified: user.email_verified, createdAt: user.created_at } : null });
+  } catch (error) {
+    console.error("Auth me error:", error.message);
+    res.status(500).json({ ok: false, error: "auth_failed" });
+  }
+});
+
+app.post("/api/auth/register", rateLimit({ windowMs: 60 * 60 * 1000, max: 8 }), async (req, res) => {
+  if (!databaseReady || !pool) return res.status(503).json({ ok: false, error: "database_unavailable" });
+  const clientId = getClientId(req);
+  if (!clientId) return res.status(400).json({ ok: false, error: "client_id_required" });
+  const email = normalizeEmail(req.body?.email || "");
+  const password = String(req.body?.password || "");
+  let nickname = compactSpaces(req.body?.nickname || "").slice(0, 40);
+  if (!validEmail(email)) return res.status(400).json({ ok: false, error: "invalid_email" });
+  if (password.length < 8 || password.length > 128) return res.status(400).json({ ok: false, error: "weak_password" });
+
+  try {
+    await ensureClientProfile(clientId);
+    if (nickname.length < 2) {
+      const { rows } = await pool.query(`SELECT nickname FROM client_profiles WHERE client_id = $1 LIMIT 1`, [clientId]);
+      nickname = compactSpaces(rows[0]?.nickname || "Гість").slice(0, 40) || "Гість";
+    }
+    const existing = await pool.query(`SELECT 1 FROM users WHERE email = $1 LIMIT 1`, [email]);
+    if (existing.rows.length) return res.status(409).json({ ok: false, error: "email_exists" });
+    const userId = crypto.randomUUID();
+    const passwordHash = await createPasswordHash(password);
+    const { rows } = await pool.query(
+      `INSERT INTO users (id, email, password_hash, nickname, last_login_at) VALUES ($1, $2, $3, $4, NOW()) RETURNING id, email, nickname, email_verified, created_at`,
+      [userId, email, passwordHash, nickname]
+    );
+    await attachAnonymousDataToUser(userId, clientId);
+    await createAuthSession(res, userId);
+    const user = rows[0];
+    res.status(201).json({ ok: true, authenticated: true, user: { id: user.id, email: user.email, nickname: user.nickname, emailVerified: user.email_verified, createdAt: user.created_at } });
+  } catch (error) {
+    console.error("Register error:", error.message);
+    if (error.code === "23505") return res.status(409).json({ ok: false, error: "email_exists" });
+    res.status(500).json({ ok: false, error: "register_failed" });
+  }
+});
+
+app.post("/api/auth/login", rateLimit({ windowMs: 15 * 60 * 1000, max: 20 }), async (req, res) => {
+  if (!databaseReady || !pool) return res.status(503).json({ ok: false, error: "database_unavailable" });
+  const clientId = getClientId(req);
+  if (!clientId) return res.status(400).json({ ok: false, error: "client_id_required" });
+  const email = normalizeEmail(req.body?.email || "");
+  const password = String(req.body?.password || "");
+  if (!validEmail(email) || !password) return res.status(400).json({ ok: false, error: "invalid_credentials" });
+  try {
+    const { rows } = await pool.query(`SELECT id, email, password_hash, nickname, email_verified, created_at FROM users WHERE email = $1 LIMIT 1`, [email]);
+    const user = rows[0];
+    if (!user || !(await verifyPassword(password, user.password_hash))) return res.status(401).json({ ok: false, error: "invalid_credentials" });
+    await attachAnonymousDataToUser(user.id, clientId);
+    await pool.query(`UPDATE users SET last_login_at = NOW() WHERE id = $1`, [user.id]);
+    await createAuthSession(res, user.id);
+    res.json({ ok: true, authenticated: true, user: { id: user.id, email: user.email, nickname: user.nickname, emailVerified: user.email_verified, createdAt: user.created_at } });
+  } catch (error) {
+    console.error("Login error:", error.message);
+    res.status(500).json({ ok: false, error: "login_failed" });
+  }
+});
+
+app.post("/api/auth/logout", rateLimit({ max: 120 }), async (req, res) => {
+  try {
+    const token = parseCookies(req).sd_session || "";
+    if (databaseReady && pool && token) await pool.query(`DELETE FROM auth_sessions WHERE token_hash = $1`, [sessionTokenHash(token)]);
+    clearSessionCookie(res);
+    res.json({ ok: true });
+  } catch {
+    clearSessionCookie(res);
+    res.json({ ok: true });
+  }
 });
 
 app.get("/api/reports", async (req, res) => {
@@ -2241,6 +2440,8 @@ app.post("/api/reports", rateLimit({ max: 20 }), async (req, res) => {
 
   const code = makeReportCode();
   const clientId = getClientId(req);
+  let authUser = null;
+  try { authUser = await getAuthUser(req); } catch {}
   const report = {
     code,
     target: valid.target,
@@ -2257,9 +2458,9 @@ app.post("/api/reports", rateLimit({ max: 20 }), async (req, res) => {
       if (clientId) await ensureClientProfile(clientId);
       await pool.query(
         `INSERT INTO community_reports
-          (code, target, target_key, type, reason, details, status, submitter_client_id)
-         VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)`,
-        [code, valid.target, valid.targetKey, valid.type, valid.reason, valid.details, clientId || null]
+          (code, target, target_key, type, reason, details, status, submitter_client_id, submitter_user_id)
+         VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8)`,
+        [code, valid.target, valid.targetKey, valid.type, valid.reason, valid.details, clientId || null, authUser?.id || null]
       );
     } else {
       memoryPendingReports.unshift(report);
@@ -2302,35 +2503,32 @@ app.get("/api/profile", rateLimit({ max: 240 }), async (req, res) => {
   const clientId = getClientId(req);
   if (!clientId) return res.status(400).json({ ok: false, error: "client_id_required" });
   if (!databaseReady || !pool) return res.status(503).json({ ok: false, error: "database_unavailable" });
-
   try {
     await ensureClientProfile(clientId);
+    const user = await getAuthUser(req);
+    if (user) {
+      await attachAnonymousDataToUser(user.id, clientId);
+      const { rows } = await pool.query(
+        `SELECT u.nickname, u.created_at, u.updated_at,
+                COALESCE((SELECT COUNT(*) FROM check_history WHERE user_id = u.id), 0)::int AS check_count,
+                (SELECT MAX(created_at) FROM check_history WHERE user_id = u.id) AS last_check_at,
+                COALESCE((SELECT COUNT(*) FROM community_reports WHERE submitter_user_id = u.id), 0)::int AS report_count,
+                COALESCE((SELECT COUNT(*) FROM community_reports WHERE submitter_user_id = u.id AND status = 'pending'), 0)::int AS pending_count,
+                COALESCE((SELECT COUNT(*) FROM community_reports WHERE submitter_user_id = u.id AND status = 'approved'), 0)::int AS approved_count,
+                COALESCE((SELECT COUNT(*) FROM community_reports WHERE submitter_user_id = u.id AND status = 'rejected'), 0)::int AS rejected_count
+         FROM users u WHERE u.id = $1 LIMIT 1`, [user.id]);
+      return res.json({ ok: true, profile: rows[0], account: { authenticated: true, email: user.email, emailVerified: user.email_verified } });
+    }
     const { rows } = await pool.query(
       `SELECT p.client_id, p.nickname, p.created_at, p.updated_at,
-              COALESCE(h.check_count, 0)::int AS check_count,
-              h.last_check_at,
-              COALESCE(r.report_count, 0)::int AS report_count,
-              COALESCE(r.pending_count, 0)::int AS pending_count,
-              COALESCE(r.approved_count, 0)::int AS approved_count,
-              COALESCE(r.rejected_count, 0)::int AS rejected_count
+              COALESCE(h.check_count, 0)::int AS check_count, h.last_check_at,
+              COALESCE(r.report_count, 0)::int AS report_count, COALESCE(r.pending_count, 0)::int AS pending_count,
+              COALESCE(r.approved_count, 0)::int AS approved_count, COALESCE(r.rejected_count, 0)::int AS rejected_count
        FROM client_profiles p
-       LEFT JOIN (
-         SELECT client_id, COUNT(*) AS check_count, MAX(created_at) AS last_check_at
-         FROM check_history WHERE client_id = $1 GROUP BY client_id
-       ) h ON h.client_id = p.client_id
-       LEFT JOIN (
-         SELECT submitter_client_id AS client_id,
-                COUNT(*) AS report_count,
-                COUNT(*) FILTER (WHERE status = 'pending') AS pending_count,
-                COUNT(*) FILTER (WHERE status = 'approved') AS approved_count,
-                COUNT(*) FILTER (WHERE status = 'rejected') AS rejected_count
-         FROM community_reports WHERE submitter_client_id = $1 GROUP BY submitter_client_id
-       ) r ON r.client_id = p.client_id
-       WHERE p.client_id = $1
-       LIMIT 1`,
-      [clientId]
-    );
-    res.json({ ok: true, profile: rows[0] });
+       LEFT JOIN (SELECT client_id, COUNT(*) AS check_count, MAX(created_at) AS last_check_at FROM check_history WHERE client_id = $1 GROUP BY client_id) h ON h.client_id = p.client_id
+       LEFT JOIN (SELECT submitter_client_id AS client_id, COUNT(*) AS report_count, COUNT(*) FILTER (WHERE status = 'pending') AS pending_count, COUNT(*) FILTER (WHERE status = 'approved') AS approved_count, COUNT(*) FILTER (WHERE status = 'rejected') AS rejected_count FROM community_reports WHERE submitter_client_id = $1 GROUP BY submitter_client_id) r ON r.client_id = p.client_id
+       WHERE p.client_id = $1 LIMIT 1`, [clientId]);
+    res.json({ ok: true, profile: rows[0], account: { authenticated: false } });
   } catch (error) {
     console.error("Profile load error:", error);
     res.status(500).json({ ok: false, error: "profile_failed" });
@@ -2341,17 +2539,16 @@ app.patch("/api/profile", rateLimit({ max: 60 }), async (req, res) => {
   const clientId = getClientId(req);
   if (!clientId) return res.status(400).json({ ok: false, error: "client_id_required" });
   if (!databaseReady || !pool) return res.status(503).json({ ok: false, error: "database_unavailable" });
-
   const nickname = compactSpaces(req.body?.nickname || "").slice(0, 40);
   if (nickname.length < 2) return res.status(400).json({ ok: false, error: "invalid_nickname" });
-
   try {
     await ensureClientProfile(clientId);
-    const { rows } = await pool.query(
-      `UPDATE client_profiles SET nickname = $1, updated_at = NOW(), last_seen_at = NOW()
-       WHERE client_id = $2 RETURNING client_id, nickname, created_at, updated_at`,
-      [nickname, clientId]
-    );
+    const user = await getAuthUser(req);
+    if (user) {
+      const { rows } = await pool.query(`UPDATE users SET nickname = $1, updated_at = NOW() WHERE id = $2 RETURNING id, nickname, created_at, updated_at`, [nickname, user.id]);
+      return res.json({ ok: true, profile: rows[0] });
+    }
+    const { rows } = await pool.query(`UPDATE client_profiles SET nickname = $1, updated_at = NOW(), last_seen_at = NOW() WHERE client_id = $2 RETURNING client_id, nickname, created_at, updated_at`, [nickname, clientId]);
     res.json({ ok: true, profile: rows[0] });
   } catch (error) {
     console.error("Profile update error:", error);
@@ -2363,16 +2560,14 @@ app.get("/api/history", rateLimit({ max: 240 }), async (req, res) => {
   const clientId = getClientId(req);
   if (!clientId) return res.status(400).json({ ok: false, error: "client_id_required" });
   if (!databaseReady || !pool) return res.status(503).json({ ok: false, error: "database_unavailable" });
-
   try {
     await ensureClientProfile(clientId);
-    const { rows } = await pool.query(
-      `SELECT id, report_id, type, input_preview, score, level, label, reasons, created_at
-       FROM check_history WHERE client_id = $1
-       ORDER BY created_at DESC LIMIT 100`,
-      [clientId]
-    );
-    res.json({ ok: true, items: rows });
+    const user = await getAuthUser(req);
+    if (user) await attachAnonymousDataToUser(user.id, clientId);
+    const { rows } = user
+      ? await pool.query(`SELECT id, report_id, type, input_preview, score, level, label, reasons, created_at FROM check_history WHERE user_id = $1 ORDER BY created_at DESC LIMIT 200`, [user.id])
+      : await pool.query(`SELECT id, report_id, type, input_preview, score, level, label, reasons, created_at FROM check_history WHERE client_id = $1 ORDER BY created_at DESC LIMIT 100`, [clientId]);
+    res.json({ ok: true, items: rows, syncedAcrossDevices: Boolean(user) });
   } catch (error) {
     console.error("History load error:", error);
     res.status(500).json({ ok: false, error: "history_failed" });
@@ -2383,11 +2578,11 @@ app.delete("/api/history", rateLimit({ max: 30 }), async (req, res) => {
   const clientId = getClientId(req);
   if (!clientId) return res.status(400).json({ ok: false, error: "client_id_required" });
   if (!databaseReady || !pool) return res.status(503).json({ ok: false, error: "database_unavailable" });
-
   try {
-    const result = await pool.query(`DELETE FROM check_history WHERE client_id = $1`, [clientId]);
+    const user = await getAuthUser(req);
+    const result = user ? await pool.query(`DELETE FROM check_history WHERE user_id = $1`, [user.id]) : await pool.query(`DELETE FROM check_history WHERE client_id = $1`, [clientId]);
     res.json({ ok: true, deleted: result.rowCount || 0 });
-  } catch (error) {
+  } catch {
     res.status(500).json({ ok: false, error: "history_clear_failed" });
   }
 });
@@ -2397,9 +2592,9 @@ app.post("/api/history/import", rateLimit({ max: 10 }), async (req, res) => {
   if (!clientId) return res.status(400).json({ ok: false, error: "client_id_required" });
   if (!databaseReady || !pool) return res.status(503).json({ ok: false, error: "database_unavailable" });
   const items = Array.isArray(req.body?.items) ? req.body.items.slice(0, 30) : [];
-
   try {
     await ensureClientProfile(clientId);
+    const user = await getAuthUser(req);
     let imported = 0;
     for (const item of items) {
       const reportId = String(item?.id || "").slice(0, 80);
@@ -2410,12 +2605,8 @@ app.post("/api/history/import", rateLimit({ max: 10 }), async (req, res) => {
       const created = new Date(item?.createdAt || Date.now());
       const createdAt = Number.isNaN(created.getTime()) ? new Date() : created;
       const result = await pool.query(
-        `INSERT INTO check_history
-          (client_id, report_id, type, input_preview, score, level, label, reasons, created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,'[]'::jsonb,$8)
-         ON CONFLICT (client_id, report_id) DO NOTHING`,
-        [clientId, reportId, type, input, score, String(item?.level || "low").slice(0,24), String(item?.label || "").slice(0,80), createdAt]
-      );
+        `INSERT INTO check_history (client_id, user_id, report_id, type, input_preview, score, level, label, reasons, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'[]'::jsonb,$9) ON CONFLICT (client_id, report_id) DO UPDATE SET user_id = COALESCE(check_history.user_id, EXCLUDED.user_id)`,
+        [clientId, user?.id || null, reportId, type, input, score, String(item?.level || "low").slice(0,24), String(item?.label || "").slice(0,80), createdAt]);
       imported += result.rowCount || 0;
     }
     res.json({ ok: true, imported });
@@ -2512,7 +2703,8 @@ app.post("/api/check", rateLimit({ max: 80 }), async (req, res) => {
     let historySaved = false;
     if (clientId && databaseReady) {
       try {
-        historySaved = await saveCheckHistory(clientId, report, input);
+        const authUser = await getAuthUser(req);
+        historySaved = await saveCheckHistory(clientId, authUser?.id || null, report, input);
       } catch (historyError) {
         console.error("History save error:", historyError.message);
       }
