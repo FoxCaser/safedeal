@@ -235,6 +235,14 @@ $("#runCheck").addEventListener("click", async () => {
       if (t.otpField) forms.push("OTP");
       const formsText = t.pageScanOk ? (forms.length ? forms.join(", ") : "Чутливих форм не знайдено") : "Не перевірено";
 
+      const contentBrandText = !t.pageScanOk
+        ? "Не перевірено"
+        : t.pageBrandMismatch
+          ? `Заявляє ${t.pageBrandTarget || "відомий бренд"} — домен інший`
+          : t.pageBrandDetected && t.pageBrandOfficialDomain
+            ? `${t.pageBrandTarget || "Бренд"} — офіційний домен`
+            : "Явної підміни бренду не знайдено";
+
       techGrid.innerHTML = `
         <div class="tech-item"><span>🌐 Домен</span><b>${escapeHtml(t.hostname || "—")}</b></div>
         <div class="tech-item"><span>🔒 Протокол</span><b>${escapeHtml(String(t.protocol || "—").toUpperCase())}</b></div>
@@ -249,6 +257,7 @@ $("#runCheck").addEventListener("click", async () => {
         <div class="tech-item"><span>🔐 SSL/TLS</span><b>${escapeHtml(sslText)}</b></div>
         <div class="tech-item"><span>↪️ Редиректи</span><b>${escapeHtml(redirectText)}</b></div>
         <div class="tech-item"><span>🧾 Форми</span><b>${escapeHtml(formsText)}</b></div>
+        <div class="tech-item"><span>🏷️ Бренд на сторінці</span><b>${escapeHtml(contentBrandText)}</b></div>
         <div class="tech-item"><span>📡 HTTP-статус</span><b>${escapeHtml(t.pageScanOk && t.pageStatus ? String(t.pageStatus) : "Не перевірено")}</b></div>
       `;
 

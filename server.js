@@ -268,7 +268,7 @@ const BRAND_PROFILES = [
   },
   {
     brand: "ПриватБанк",
-    aliases: ["privatbank", "privat24"],
+    aliases: ["privatbank", "privat24", "приватбанк", "приват24"],
     officialDomains: ["privatbank.ua", "privat24.ua"]
   },
   {
@@ -277,8 +277,13 @@ const BRAND_PROFILES = [
     officialDomains: ["monobank.ua"]
   },
   {
+    brand: "OLX",
+    aliases: ["olx"],
+    officialDomains: ["olx.ua", "olx.pl", "olx.ro", "olx.bg", "olx.kz", "olx.uz", "olx.pt"]
+  },
+  {
     brand: "Нова пошта",
-    aliases: ["novaposhta", "novaposhta"],
+    aliases: ["novaposhta", "nova poshta", "нова пошта", "новапошта"],
     officialDomains: ["novaposhta.ua"]
   }
 ];
@@ -736,6 +741,103 @@ function requestPublicUrlOnce(url, { timeoutMs = 6500, maxBytes = 280000 } = {})
   });
 }
 
+
+function escapeRegex(value = "") {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizedVisiblePageText(html = "") {
+  return compactSpaces(
+    String(html)
+      .replace(/<!--[\s\S]*?-->/g, " ")
+      .replace(/<script\b[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style\b[\s\S]*?<\/style>/gi, " ")
+      .replace(/<noscript\b[\s\S]*?<\/noscript>/gi, " ")
+      .replace(/<svg\b[\s\S]*?<\/svg>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;|&#160;/gi, " ")
+      .replace(/&amp;/gi, "&")
+      .replace(/&quot;|&#34;/gi, '"')
+      .replace(/&#39;|&apos;/gi, "'")
+  ).slice(0, 120000);
+}
+
+function extractProminentPageText(html = "", title = "") {
+  const source = String(html).slice(0, 280000);
+  const parts = [title];
+  const patterns = [
+    /<(?:h1|h2)\b[^>]*>([\s\S]*?)<\/(?:h1|h2)>/gi,
+    /<img\b[^>]*\balt\s*=\s*["']([^"']{1,160})["'][^>]*>/gi,
+    /<(?:button|a)\b[^>]*>([^<>]{1,120})<\/(?:button|a)>/gi
+  ];
+  for (const re of patterns) {
+    let count = 0;
+    for (const match of source.matchAll(re)) {
+      parts.push(String(match[1] || "").replace(/<[^>]+>/g, " "));
+      if (++count >= 30) break;
+    }
+  }
+  for (const match of source.matchAll(/<meta\b[^>]*>/gi)) {
+    const tag = match[0];
+    if (!/(?:property|name)\s*=\s*["'](?:og:title|twitter:title|application-name|apple-mobile-web-app-title)["']/i.test(tag)) continue;
+    const content = tag.match(/content\s*=\s*["']([^"']{1,200})["']/i);
+    if (content) parts.push(content[1]);
+  }
+  return compactSpaces(parts.join(" ")).slice(0, 20000);
+}
+
+function aliasPresent(text = "", alias = "") {
+  const hay = String(text).toLowerCase();
+  const needle = String(alias).toLowerCase().trim();
+  if (!needle) return false;
+  if (/^[a-z0-9]+$/i.test(needle)) {
+    const re = new RegExp(`(^|[^a-z0-9])${escapeRegex(needle)}([^a-z0-9]|$)`, "i");
+    return re.test(hay);
+  }
+  return hay.includes(needle);
+}
+
+function detectPageBrandIdentity(html = "", pageUrl = "", title = "", sensitive = false) {
+  let hostname = "";
+  try { hostname = new URL(pageUrl).hostname.toLowerCase().replace(/^www\./, ""); } catch {}
+
+  const prominent = extractProminentPageText(html, title);
+  const visible = normalizedVisiblePageText(html);
+  let best = null;
+
+  for (const profile of BRAND_PROFILES) {
+    const official = isOfficialBrandHost(hostname, profile);
+    for (const alias of profile.aliases) {
+      const inTitle = aliasPresent(title, alias);
+      const inProminent = inTitle || aliasPresent(prominent, alias);
+      const inVisible = aliasPresent(visible, alias);
+      if (!inProminent && !(sensitive && inVisible)) continue;
+
+      const strength = inTitle ? 4 : inProminent ? 3 : 2;
+      const candidate = {
+        detected: true,
+        brand: profile.brand,
+        alias,
+        official,
+        mismatch: !official,
+        evidence: inTitle ? "title" : inProminent ? "prominent" : "sensitive-page",
+        strength
+      };
+      if (!best || candidate.strength > best.strength) best = candidate;
+    }
+  }
+
+  return best || {
+    detected: false,
+    brand: null,
+    alias: null,
+    official: false,
+    mismatch: false,
+    evidence: null,
+    strength: 0
+  };
+}
+
 function analyzeHtmlPage(html = "", pageUrl = "") {
   const text = String(html).slice(0, 280000);
   const lower = text.toLowerCase();
@@ -765,6 +867,12 @@ function analyzeHtmlPage(html = "", pageUrl = "") {
 
   const titleMatch = text.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   const title = titleMatch ? compactSpaces(titleMatch[1].replace(/<[^>]+>/g, " ")).slice(0, 120) : "";
+  const brandIdentity = detectPageBrandIdentity(
+    text,
+    pageUrl,
+    title,
+    loginForm || paymentForm || otpField
+  );
 
   return {
     hasForm,
@@ -774,7 +882,14 @@ function analyzeHtmlPage(html = "", pageUrl = "") {
     walletSecretRequest,
     executableDownload,
     externalFormAction,
-    title
+    title,
+    pageBrandDetected: Boolean(brandIdentity.detected),
+    pageBrandTarget: brandIdentity.brand || null,
+    pageBrandAlias: brandIdentity.alias || null,
+    pageBrandOfficialDomain: Boolean(brandIdentity.official),
+    pageBrandMismatch: Boolean(brandIdentity.mismatch),
+    pageBrandEvidence: brandIdentity.evidence || null,
+    pageBrandStrength: Number(brandIdentity.strength || 0)
   };
 }
 
@@ -830,7 +945,14 @@ async function inspectRemotePage(rawUrl) {
     walletSecretRequest: false,
     executableDownload: false,
     externalFormAction: false,
-    title: ""
+    title: "",
+    pageBrandDetected: false,
+    pageBrandTarget: null,
+    pageBrandAlias: null,
+    pageBrandOfficialDomain: false,
+    pageBrandMismatch: false,
+    pageBrandEvidence: null,
+    pageBrandStrength: 0
   };
 
   const finalHostname = current.hostname.toLowerCase();
@@ -1352,6 +1474,20 @@ async function inspectUrl(rawUrl) {
     if (remotePage.paymentForm) facts.push("На сторінці знайдені поля платіжної картки");
     if (remotePage.otpField) facts.push("На сторінці знайдено поле одноразового коду / OTP");
 
+    if (remotePage.pageBrandDetected) {
+      if (remotePage.pageBrandOfficialDomain) {
+        facts.push(`Вміст сторінки згадує ${remotePage.pageBrandTarget}; кінцевий домен входить до списку офіційних доменів цього бренду`);
+      } else if (remotePage.pageBrandMismatch) {
+        const sensitiveBrandForm = remotePage.loginForm || remotePage.paymentForm || remotePage.otpField;
+        points += sensitiveBrandForm ? 48 : 22;
+        reasons.push(
+          sensitiveBrandForm
+            ? `Сторінка представляється як ${remotePage.pageBrandTarget}, просить чутливі дані, але домен ${remotePage.finalHostname} не належить до відомих офіційних доменів бренду`
+            : `Сторінка помітно використовує бренд ${remotePage.pageBrandTarget}, але домен ${remotePage.finalHostname} не належить до відомих офіційних доменів бренду`
+        );
+      }
+    }
+
     if (remotePage.loginForm && remotePage.finalProtocol === "http") {
       points += 38;
       reasons.push("Сторінка просить пароль через незахищене HTTP-з’єднання");
@@ -1487,7 +1623,14 @@ async function inspectUrl(rawUrl) {
       externalFormAction: Boolean(remotePage.externalFormAction),
       walletSecretRequest: Boolean(remotePage.walletSecretRequest),
       executableDownload: Boolean(remotePage.executableDownload),
-      pageTitle: remotePage.title || null
+      pageTitle: remotePage.title || null,
+      pageBrandDetected: Boolean(remotePage.pageBrandDetected),
+      pageBrandTarget: remotePage.pageBrandTarget || null,
+      pageBrandAlias: remotePage.pageBrandAlias || null,
+      pageBrandOfficialDomain: Boolean(remotePage.pageBrandOfficialDomain),
+      pageBrandMismatch: Boolean(remotePage.pageBrandMismatch),
+      pageBrandEvidence: remotePage.pageBrandEvidence || null,
+      pageBrandStrength: Number(remotePage.pageBrandStrength || 0)
     }
   };
 }
