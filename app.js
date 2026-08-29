@@ -215,33 +215,55 @@ $("#runCheck").addEventListener("click", async () => {
       else if (t.longUrl) structureFlags.push("дуже довгий URL");
       const structureText = structureFlags.length ? structureFlags.join(", ") : "Без явних трюків";
 
+      const dnsText =
+        t.dnsOk === false
+          ? "Домен не знайдено через DNS"
+          : Array.isArray(t.dns) && t.dns.length
+            ? `${t.dns.length} адрес(и)`
+            : "DNS-відповідь порожня";
+
+      const scanUnavailableText =
+        t.dnsOk === false
+          ? "Неможливо перевірити — домен не відповідає через DNS"
+          : t.pageScanError === "private_address"
+            ? "Неможливо перевірити — приватна адреса"
+            : "Неможливо перевірити — сайт не відповів";
+
       const sslText =
         t.finalProtocol !== "https"
           ? "Немає HTTPS"
-          : t.tlsPresent === false
-            ? "Не перевірено"
-            : t.tlsAuthorized
-              ? (t.tlsValidTo ? `Дійсний до ${new Date(t.tlsValidTo).toLocaleDateString("uk-UA")}` : "Дійсний")
-              : "Проблема сертифіката";
+          : !t.pageScanOk
+            ? scanUnavailableText
+            : t.tlsPresent === false
+              ? "HTTPS є, але сертифікат не вдалося прочитати"
+              : t.tlsAuthorized
+                ? (t.tlsValidTo ? `Дійсний до ${new Date(t.tlsValidTo).toLocaleDateString("uk-UA")}` : "Дійсний")
+                : "Проблема сертифіката";
 
       const redirectText =
         t.pageScanOk
           ? (t.redirectCount > 0 ? `${t.redirectCount} → ${t.finalHostname || "—"}` : "Немає")
-          : "Не перевірено";
+          : scanUnavailableText;
 
       const forms = [];
       if (t.loginForm) forms.push("вхід");
       if (t.paymentForm) forms.push("оплата");
       if (t.otpField) forms.push("OTP");
-      const formsText = t.pageScanOk ? (forms.length ? forms.join(", ") : "Чутливих форм не знайдено") : "Не перевірено";
+      const formsText = t.pageScanOk
+        ? (forms.length ? forms.join(", ") : "Чутливих форм не знайдено")
+        : scanUnavailableText;
 
       const contentBrandText = !t.pageScanOk
-        ? "Не перевірено"
+        ? scanUnavailableText
         : t.pageBrandMismatch
           ? `Заявляє ${t.pageBrandTarget || "відомий бренд"} — домен інший`
           : t.pageBrandDetected && t.pageBrandOfficialDomain
             ? `${t.pageBrandTarget || "Бренд"} — офіційний домен`
             : "Явної підміни бренду не знайдено";
+
+      const httpStatusText = t.pageScanOk && t.pageStatus
+        ? String(t.pageStatus)
+        : scanUnavailableText;
 
       techGrid.innerHTML = `
         <div class="tech-item"><span>🌐 Домен</span><b>${escapeHtml(t.hostname || "—")}</b></div>
@@ -249,7 +271,7 @@ $("#runCheck").addEventListener("click", async () => {
         <div class="tech-item"><span>🪞 Підміна домену</span><b>${escapeHtml(spoofText)}</b></div>
         <div class="tech-item"><span>🧬 Структура URL</span><b>${escapeHtml(structureText)}</b></div>
         <div class="tech-item"><span>📅 Вік домену</span><b>${escapeHtml(ageText)}</b></div>
-        <div class="tech-item"><span>🛰 DNS</span><b>${Array.isArray(t.dns) && t.dns.length ? `${t.dns.length} адрес(и)` : "Не знайдено"}</b></div>
+        <div class="tech-item"><span>🛰 DNS</span><b>${escapeHtml(dnsText)}</b></div>
         <div class="tech-item"><span>🛡 Google Web Risk</span><b>${escapeHtml(webRiskText)}</b></div>
         <div class="tech-item"><span>🎣 PhishTank</span><b>${escapeHtml(phishTankText)}</b></div>
         <div class="tech-item"><span>🧨 PhishDestroy</span><b>${escapeHtml(phishDestroyText)}</b></div>
@@ -258,7 +280,7 @@ $("#runCheck").addEventListener("click", async () => {
         <div class="tech-item"><span>↪️ Редиректи</span><b>${escapeHtml(redirectText)}</b></div>
         <div class="tech-item"><span>🧾 Форми</span><b>${escapeHtml(formsText)}</b></div>
         <div class="tech-item"><span>🏷️ Бренд на сторінці</span><b>${escapeHtml(contentBrandText)}</b></div>
-        <div class="tech-item"><span>📡 HTTP-статус</span><b>${escapeHtml(t.pageScanOk && t.pageStatus ? String(t.pageStatus) : "Не перевірено")}</b></div>
+        <div class="tech-item"><span>📡 HTTP-статус</span><b>${escapeHtml(httpStatusText)}</b></div>
       `;
 
       factsList.innerHTML = (r.facts || [])
