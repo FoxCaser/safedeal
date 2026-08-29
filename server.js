@@ -328,13 +328,13 @@ async function checkPhishTank(url) {
     body.set("format", "json");
     if (PHISHTANK_APP_KEY) body.set("app_key", PHISHTANK_APP_KEY);
 
-    const response = await fetch("https://checkurl.phishtank.com/checkurl/", {
+    const response = await fetch("http://checkurl.phishtank.com/checkurl/", {
       method: "POST",
       signal: controller.signal,
       headers: {
         "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
         "Accept": "application/json",
-        "User-Agent": "SafeDeal/1.0 (anti-fraud URL checker)"
+        "User-Agent": "phishtank/safedeal"
       },
       body: body.toString()
     });
