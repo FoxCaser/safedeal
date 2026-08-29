@@ -239,3 +239,98 @@ textarea:focus{border-color:#3d78ff}.privacy-note{margin:10px 0;padding:10px 12p
   .technical-grid{grid-template-columns:1fr 1fr}
   .tech-item:last-child{grid-column:1/-1}
 }
+
+/* SafeDeal v4: complaints + local history */
+.text-input,.select-input{
+  width:100%;
+  min-height:44px;
+  border:1px solid var(--line);
+  border-radius:11px;
+  background:#081524;
+  color:var(--text);
+  padding:11px 12px;
+  outline:0
+}
+.text-input:focus,.select-input:focus{border-color:#3d78ff}
+.select-input{appearance:auto}
+.report-search-row{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) 180px 110px;
+  gap:9px;
+  margin-top:20px
+}
+.report-meta{min-height:20px;margin:11px 0;color:var(--muted);font-size:11px}
+.report-results{display:grid;gap:10px}
+.report-row{
+  border:1px solid var(--line);
+  border-radius:14px;
+  padding:14px;
+  background:#0a1727
+}
+.report-row-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.report-type,.report-status{
+  display:inline-flex;
+  width:max-content;
+  border-radius:999px;
+  padding:5px 8px;
+  font-size:9px;
+  border:1px solid var(--line);
+  color:#9db0c9
+}
+.report-status{color:#7ee4b2;border-color:rgba(55,217,143,.25);background:rgba(55,217,143,.05)}
+.report-row h4{margin:10px 0 6px;overflow-wrap:anywhere}
+.report-row p{margin:0 0 8px;color:#cbd8e8;font-size:12px;line-height:1.55}
+.report-row small{color:var(--muted);font-size:9px}
+.report-divider{height:1px;background:var(--line);margin:28px 0}
+.small-copy{font-size:12px!important;max-width:850px!important}
+.report-form{display:grid;grid-template-columns:1fr 180px;gap:10px;margin-top:15px;max-width:900px}
+.report-form #reportReason,.report-form textarea,.report-form .full,.report-submit-status{grid-column:1/-1}
+.report-form textarea{min-height:95px}
+.report-submit-status{min-height:20px;font-size:11px;line-height:1.5}
+.report-submit-status.success{color:#7ee4b2}
+.report-submit-status.error{color:#ff9299}
+.secondary-btn{
+  border:1px solid var(--line);
+  background:var(--panel2);
+  color:#cbd8e8;
+  border-radius:10px;
+  padding:10px 12px
+}
+.history-head{display:flex;justify-content:space-between;align-items:flex-start;gap:18px}
+.history-head .empty-panel h2{margin:0}
+.history-list{display:grid;gap:10px;margin-top:20px}
+.history-item{
+  display:flex;
+  justify-content:space-between;
+  gap:16px;
+  align-items:center;
+  border:1px solid var(--line);
+  border-radius:14px;
+  padding:14px;
+  background:#0a1727
+}
+.history-item h4{margin:6px 0;max-width:720px;overflow-wrap:anywhere;font-size:13px}
+.history-item small{color:var(--muted);font-size:9px}
+.history-type{font-size:8px;letter-spacing:.08em;text-transform:uppercase;color:#66aeff}
+.history-score{font-size:26px;font-weight:900;white-space:nowrap}
+.history-score span{font-size:10px;color:var(--muted);margin-left:2px}
+.empty-state{
+  border:1px dashed var(--line);
+  border-radius:13px;
+  padding:18px;
+  color:var(--muted);
+  font-size:12px;
+  text-align:center
+}
+
+@media(max-width:650px){
+  .empty-panel{padding:20px 16px;min-height:0}
+  .empty-panel h2{font-size:30px}
+  .report-search-row{grid-template-columns:1fr}
+  .report-form{grid-template-columns:1fr}
+  .report-form #reportReason,.report-form textarea,.report-form .full,.report-submit-status{grid-column:auto}
+  .history-head{align-items:center}
+  .history-head p{font-size:11px}
+  .history-item{align-items:flex-start}
+  .history-score{font-size:22px}
+}

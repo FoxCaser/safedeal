@@ -13,11 +13,23 @@ const titles = {
   reputation: "Історія репутації"
 };
 
+function escapeHtml(value = "") {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 function showPage(id) {
   $$(".page").forEach((p) => p.classList.toggle("active", p.id === id));
-  $$("[data-page]").forEach((b) => b.classList.toggle("active", b.dataset.page === id));
+  $$('[data-page]').forEach((b) => b.classList.toggle("active", b.dataset.page === id));
   $("#pageTitle").textContent = titles[id] || titles.home;
   window.scrollTo({ top: 0, behavior: "smooth" });
+
+  if (id === "reports") loadReports().catch(console.error);
+  if (id === "history") renderHistory();
 }
 
 function selectType(type) {
@@ -27,8 +39,8 @@ function selectType(type) {
   setTimeout(() => $("#quickCheck").scrollIntoView({ behavior: "smooth", block: "start" }), 50);
 }
 
-$$("[data-page]").forEach((btn) => btn.addEventListener("click", () => showPage(btn.dataset.page)));
-$$("[data-check]").forEach((btn) => btn.addEventListener("click", () => selectType(btn.dataset.check)));
+$$('[data-page]').forEach((btn) => btn.addEventListener("click", () => showPage(btn.dataset.page)));
+$$('[data-check]').forEach((btn) => btn.addEventListener("click", () => selectType(btn.dataset.check)));
 $$(".check-tab").forEach((btn) => btn.addEventListener("click", () => selectType(btn.dataset.type)));
 
 const focusCheck = document.querySelector("[data-focus-check]");
@@ -49,6 +61,64 @@ function setScoreVisual(score, level) {
 
   ring.style.background = `conic-gradient(${color} 0 ${score}%, #17263a ${score}% 100%)`;
   $("#scoreLabel").style.color = color;
+}
+
+function getHistory() {
+  try {
+    const raw = localStorage.getItem("safedeal_history_v1");
+    const items = raw ? JSON.parse(raw) : [];
+    return Array.isArray(items) ? items : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveHistory(report, input) {
+  const items = getHistory();
+  items.unshift({
+    id: report.id,
+    type: report.type,
+    input: String(input).slice(0, 240),
+    score: report.score,
+    label: report.label,
+    createdAt: new Date().toISOString()
+  });
+
+  localStorage.setItem("safedeal_history_v1", JSON.stringify(items.slice(0, 30)));
+}
+
+function renderHistory() {
+  const wrap = $("#historyList");
+  if (!wrap) return;
+
+  const items = getHistory();
+  if (!items.length) {
+    wrap.innerHTML = `<div class="empty-state">Історія поки порожня. Виконай першу перевірку.</div>`;
+    return;
+  }
+
+  wrap.innerHTML = items.map((item) => {
+    const date = new Date(item.createdAt);
+    const shownDate = Number.isNaN(date.getTime()) ? "—" : date.toLocaleString("uk-UA");
+    return `
+      <article class="history-item">
+        <div>
+          <span class="history-type">${escapeHtml(item.type)}</span>
+          <h4>${escapeHtml(item.input)}</h4>
+          <small>${escapeHtml(shownDate)}</small>
+        </div>
+        <div class="history-score">${Number(item.score) || 0}<span>/100</span></div>
+      </article>
+    `;
+  }).join("");
+}
+
+const clearHistory = $("#clearHistory");
+if (clearHistory) {
+  clearHistory.addEventListener("click", () => {
+    localStorage.removeItem("safedeal_history_v1");
+    renderHistory();
+  });
 }
 
 $("#runCheck").addEventListener("click", async () => {
@@ -76,8 +146,8 @@ $("#runCheck").addEventListener("click", async () => {
     $("#reportId").textContent = r.id;
     $("#scoreValue").textContent = r.score;
     $("#scoreLabel").textContent = r.label;
-    $("#reasonList").innerHTML = r.reasons.map((x) => `<div class="reason">! <span>${x}</span></div>`).join("");
-    $("#actionList").innerHTML = r.actions.map((x) => `<div class="action">✓ <span>${x}</span></div>`).join("");
+    $("#reasonList").innerHTML = r.reasons.map((x) => `<div class="reason">! <span>${escapeHtml(x)}</span></div>`).join("");
+    $("#actionList").innerHTML = r.actions.map((x) => `<div class="action">✓ <span>${escapeHtml(x)}</span></div>`).join("");
     $("#disclaimer").textContent = r.disclaimer;
     setScoreVisual(r.score, r.level);
 
@@ -87,49 +157,50 @@ $("#runCheck").addEventListener("click", async () => {
 
     const t = r.technical;
     if (t) {
-      const ageText =
-        Number.isFinite(t.domainAgeDays) ? `${t.domainAgeDays} дн.` : "Не підтверджено";
-
+      const ageText = Number.isFinite(t.domainAgeDays) ? `${t.domainAgeDays} дн.` : "Не підтверджено";
       const webRiskText =
         t.webRiskConfigured === false
           ? "Не підключено"
           : t.webRiskMatches > 0
             ? `Є збіг (${t.webRiskMatches})`
-            : "Відомих збігів немає";
+            : t.webRiskOk
+              ? "Відомих збігів немає"
+              : "Тимчасово недоступно";
+
+      const phishTankText =
+        t.phishTankOk
+          ? (t.phishTankInDatabase && t.phishTankVerified && t.phishTankValid
+              ? "Підтверджений фішинг"
+              : t.phishTankInDatabase
+                ? "Є запис у базі"
+                : "Збігів немає")
+          : t.phishTankRateLimited
+            ? "Ліміт запитів"
+            : "Тимчасово недоступно";
 
       techGrid.innerHTML = `
-        <div class="tech-item">
-          <span>🌐 Домен</span>
-          <b>${t.hostname || "—"}</b>
-        </div>
-        <div class="tech-item">
-          <span>🔒 Протокол</span>
-          <b>${String(t.protocol || "—").toUpperCase()}</b>
-        </div>
-        <div class="tech-item">
-          <span>📅 Вік домену</span>
-          <b>${ageText}</b>
-        </div>
-        <div class="tech-item">
-          <span>🛰 DNS</span>
-          <b>${Array.isArray(t.dns) && t.dns.length ? `${t.dns.length} адрес(и)` : "Не знайдено"}</b>
-        </div>
-        <div class="tech-item">
-          <span>🛡 Google Web Risk</span>
-          <b>${webRiskText}</b>
-        </div>
+        <div class="tech-item"><span>🌐 Домен</span><b>${escapeHtml(t.hostname || "—")}</b></div>
+        <div class="tech-item"><span>🔒 Протокол</span><b>${escapeHtml(String(t.protocol || "—").toUpperCase())}</b></div>
+        <div class="tech-item"><span>📅 Вік домену</span><b>${escapeHtml(ageText)}</b></div>
+        <div class="tech-item"><span>🛰 DNS</span><b>${Array.isArray(t.dns) && t.dns.length ? `${t.dns.length} адрес(и)` : "Не знайдено"}</b></div>
+        <div class="tech-item"><span>🛡 Google Web Risk</span><b>${escapeHtml(webRiskText)}</b></div>
+        <div class="tech-item"><span>🎣 PhishTank</span><b>${escapeHtml(phishTankText)}</b></div>
       `;
 
       factsList.innerHTML = (r.facts || [])
-        .map((x) => `<div class="fact">✓ <span>${x}</span></div>`)
+        .map((x) => `<div class="fact">✓ <span>${escapeHtml(x)}</span></div>`)
         .join("");
 
       techBox.classList.remove("hidden");
     } else {
       techGrid.innerHTML = "";
-      factsList.innerHTML = "";
-      techBox.classList.add("hidden");
+      factsList.innerHTML = (r.facts || [])
+        .map((x) => `<div class="fact">✓ <span>${escapeHtml(x)}</span></div>`)
+        .join("");
+      techBox.classList.toggle("hidden", !(r.facts || []).length);
     }
+
+    saveHistory(r, input);
 
     const card = $("#resultCard");
     card.classList.remove("hidden");
@@ -150,18 +221,121 @@ async function loadAlerts() {
   $("#alertsGrid").innerHTML = data.items.map((item) => `
     <article class="alert-card">
       <div class="alert-head">
-        <span class="risk-badge ${item.level}">${item.label}</span>
-        <small>${item.updatedAt}</small>
+        <span class="risk-badge ${escapeHtml(item.level)}">${escapeHtml(item.label)}</span>
+        <small>${escapeHtml(item.updatedAt)}</small>
       </div>
-      <h4>${item.target}</h4>
-      <p>${item.reasons[0]}</p>
-      <div class="alert-score">${item.score}/100</div>
+      <h4>${escapeHtml(item.target)}</h4>
+      <p>${escapeHtml(item.reasons?.[0] || "Є сигнали ризику")}</p>
+      <div class="alert-score">${Number(item.score) || 0}/100</div>
     </article>
   `).join("");
 }
 
-loadAlerts().catch(console.error);
+function typeLabel(type) {
+  return ({
+    seller: "Продавець",
+    job: "Вакансія",
+    link: "Посилання",
+    contact: "Контакт",
+    text: "Текст"
+  })[type] || type;
+}
 
+async function loadReports() {
+  const search = $("#reportSearch");
+  const type = $("#reportTypeFilter");
+  const results = $("#reportResults");
+  const meta = $("#reportSearchMeta");
+  if (!results || !meta) return;
+
+  const q = search?.value.trim() || "";
+  const selectedType = type?.value || "all";
+  const params = new URLSearchParams();
+  if (q) params.set("q", q);
+  if (selectedType !== "all") params.set("type", selectedType);
+
+  meta.textContent = "Шукаємо...";
+
+  const res = await fetch(`/api/reports?${params.toString()}`);
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "reports_failed");
+
+  meta.textContent = `Знайдено: ${data.items.length}. ${data.demo ? "Частина записів зараз демонстраційна." : ""}`;
+
+  if (!data.items.length) {
+    results.innerHTML = `<div class="empty-state">Збігів не знайдено.</div>`;
+    return;
+  }
+
+  results.innerHTML = data.items.map((item) => `
+    <article class="report-row">
+      <div class="report-row-top">
+        <span class="report-type">${escapeHtml(typeLabel(item.type))}</span>
+        <span class="report-status">${escapeHtml(item.statusLabel || "Перевірено")}</span>
+      </div>
+      <h4>${escapeHtml(item.target)}</h4>
+      <p>${escapeHtml(item.reason || item.reasons?.[0] || "Є підтверджені сигнали ризику")}</p>
+      <small>${escapeHtml(item.updatedAt || "")}</small>
+    </article>
+  `).join("");
+}
+
+const searchReports = $("#searchReports");
+if (searchReports) searchReports.addEventListener("click", () => loadReports().catch(console.error));
+
+const reportSearch = $("#reportSearch");
+if (reportSearch) {
+  reportSearch.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") loadReports().catch(console.error);
+  });
+}
+
+const submitReport = $("#submitReport");
+if (submitReport) {
+  submitReport.addEventListener("click", async () => {
+    const target = $("#reportTarget").value.trim();
+    const type = $("#reportSubmitType").value;
+    const reason = $("#reportReason").value.trim();
+    const details = $("#reportDetails").value.trim();
+    const status = $("#reportSubmitStatus");
+
+    if (!target || !reason) {
+      status.textContent = "Заповни об’єкт скарги та коротку причину.";
+      status.className = "report-submit-status error";
+      return;
+    }
+
+    submitReport.disabled = true;
+    submitReport.textContent = "Надсилаємо...";
+    status.textContent = "";
+
+    try {
+      const res = await fetch("/api/reports", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target, type, reason, details })
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "submit_failed");
+
+      status.textContent = data.persistent
+        ? `Скаргу прийнято. Код: ${data.report.code}. Статус: на модерації.`
+        : `Тестову скаргу прийнято. Код: ${data.report.code}. Постійне збереження запрацює після підключення бази даних.`;
+      status.className = "report-submit-status success";
+      $("#reportReason").value = "";
+      $("#reportDetails").value = "";
+    } catch (e) {
+      console.error(e);
+      status.textContent = "Не вдалося надіслати скаргу.";
+      status.className = "report-submit-status error";
+    } finally {
+      submitReport.disabled = false;
+      submitReport.textContent = "Надіслати на модерацію";
+    }
+  });
+}
+
+loadAlerts().catch(console.error);
 
 const screenshotInput = document.querySelector("#screenshotInput");
 const screenshotName = document.querySelector("#screenshotName");

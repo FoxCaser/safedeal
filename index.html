@@ -178,18 +178,59 @@
       </section>
 
 <section class="page" id="reports">
-        <article class="empty-panel">
+        <article class="empty-panel reports-page">
           <span class="eyebrow">REPORT DATABASE</span>
           <h2>База скарг</h2>
-          <p>У наступному етапі тут буде пошук по сайту, телефону, Telegram, email та вакансіях із модерацією скарг.</p>
+          <p>Шукай збіги за сайтом, телефоном, Telegram, email або назвою. Нові скарги не публікуються автоматично — спочатку вони мають пройти модерацію.</p>
+
+          <div class="report-search-row">
+            <input id="reportSearch" class="text-input" placeholder="Наприклад: example.com, @username, +380...">
+            <select id="reportTypeFilter" class="select-input">
+              <option value="all">Усі типи</option>
+              <option value="seller">Продавці</option>
+              <option value="job">Вакансії</option>
+              <option value="link">Посилання</option>
+              <option value="contact">Контакти</option>
+            </select>
+            <button class="primary" id="searchReports">Знайти</button>
+          </div>
+
+          <div id="reportSearchMeta" class="report-meta"></div>
+          <div id="reportResults" class="report-results"></div>
+
+          <div class="report-divider"></div>
+
+          <span class="eyebrow">SEND REPORT</span>
+          <h3>Подати скаргу</h3>
+          <p class="small-copy">Вкажи тільки те, що можеш описати фактично. Не додавай паролі, CVV, PIN, SMS-коди або повні реквізити картки.</p>
+
+          <div class="report-form">
+            <input id="reportTarget" class="text-input" placeholder="Сайт, @username, номер або email">
+            <select id="reportSubmitType" class="select-input">
+              <option value="seller">Продавець</option>
+              <option value="job">Вакансія</option>
+              <option value="link">Посилання</option>
+              <option value="contact">Контакт</option>
+            </select>
+            <input id="reportReason" class="text-input" placeholder="Коротко: що сталося?">
+            <textarea id="reportDetails" placeholder="Додаткові факти (необов’язково)"></textarea>
+            <button class="primary full" id="submitReport">Надіслати на модерацію</button>
+            <div id="reportSubmitStatus" class="report-submit-status"></div>
+          </div>
         </article>
       </section>
 
       <section class="page" id="history">
-        <article class="empty-panel">
-          <span class="eyebrow">HISTORY</span>
-          <h2>Історія перевірок</h2>
-          <p>Після підключення акаунтів і бази даних тут зберігатимуться перевірки користувача.</p>
+        <article class="empty-panel history-page">
+          <div class="history-head">
+            <div>
+              <span class="eyebrow">HISTORY</span>
+              <h2>Історія перевірок</h2>
+              <p>Останні перевірки зберігаються на цьому пристрої в браузері.</p>
+            </div>
+            <button id="clearHistory" class="secondary-btn">Очистити</button>
+          </div>
+          <div id="historyList" class="history-list"></div>
         </article>
       </section>
 

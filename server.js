@@ -8,11 +8,15 @@ const helmet = require("helmet");
 const compression = require("compression");
 const cors = require("cors");
 const morgan = require("morgan");
+const { Pool } = require("pg");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const GOOGLE_WEB_RISK_API_KEY = process.env.GOOGLE_WEB_RISK_API_KEY || "";
+const PHISHTANK_APP_KEY = process.env.PHISHTANK_APP_KEY || "";
+const DATABASE_URL = process.env.DATABASE_URL || "";
 
+app.set("trust proxy", 1);
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(compression());
 app.use(cors());
@@ -20,42 +24,131 @@ app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan("tiny"));
 
-const sampleReports = [
+const ALLOWED_TYPES = new Set(["seller", "job", "link", "contact", "text"]);
+
+const demoApprovedReports = [
   {
-    id: "R-78425",
-    target: "t.me/fast_money_ua",
+    code: "DEMO-1001",
+    target: "demo-shop.example",
+    targetKey: "demo-shop.example",
+    type: "seller",
+    status: "approved",
+    statusLabel: "Демо-запис",
+    reason: "Приклад: скарги на вимогу повної передоплати без безпечного способу оплати.",
+    updatedAt: "демо"
+  },
+  {
+    code: "DEMO-1002",
+    target: "@demo_fast_job",
+    targetKey: "@demo_fast_job",
+    type: "job",
+    status: "approved",
+    statusLabel: "Демо-запис",
+    reason: "Приклад: вакансія просить внесок для «активації» завдань.",
+    updatedAt: "демо"
+  }
+];
+
+const demoAlerts = [
+  {
+    id: "DEMO-78425",
+    target: "@demo_fast_job",
     type: "job",
     score: 92,
     level: "very-high",
     label: "Дуже високий ризик",
     reasons: [
-      "Обіцяють нереалістичний дохід без досвіду",
-      "Просять депозит / передоплату для активації",
-      "Є підозріле зовнішнє посилання",
-      "Запитують персональні або фінансові дані",
-      "Схема схожа на task scam / fake job"
+      "Демо: обіцянка нереалістичного доходу та платна активація"
     ],
-    updatedAt: "сьогодні"
+    updatedAt: "демо"
   },
   {
-    id: "R-78412",
-    target: "shop-iphone-sale.com",
+    id: "DEMO-78412",
+    target: "demo-shop.example",
     type: "seller",
     score: 76,
     level: "high",
     label: "Високий ризик",
     reasons: [
-      "Новий домен",
-      "Ціна суттєво нижча за типову",
-      "Є скарги користувачів",
-      "Продавець наполягає на повній передоплаті"
+      "Демо: повна передоплата та кілька сигналів ризику"
     ],
-    updatedAt: "15 хв тому"
+    updatedAt: "демо"
   }
 ];
 
+let pool = null;
+let databaseReady = false;
+const memoryPendingReports = [];
+
+if (DATABASE_URL) {
+  pool = new Pool({
+    connectionString: DATABASE_URL,
+    ssl: DATABASE_URL.includes("localhost")
+      ? false
+      : { rejectUnauthorized: false }
+  });
+}
+
+async function initDatabase() {
+  if (!pool) return;
+
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS community_reports (
+        id BIGSERIAL PRIMARY KEY,
+        code TEXT UNIQUE NOT NULL,
+        target TEXT NOT NULL,
+        target_key TEXT NOT NULL,
+        type TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        details TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_reports_target_key ON community_reports(target_key)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_reports_status ON community_reports(status)`);
+    databaseReady = true;
+    console.log("Database: connected");
+  } catch (error) {
+    databaseReady = false;
+    console.error("Database init failed:", error.message);
+  }
+}
+
 function normalizeText(value = "") {
   return String(value).trim().toLowerCase();
+}
+
+function compactSpaces(value = "") {
+  return String(value).replace(/\s+/g, " ").trim();
+}
+
+function normalizeTargetKey(value = "") {
+  const raw = compactSpaces(value).toLowerCase();
+  if (!raw) return "";
+
+  const phoneDigits = raw.replace(/\D/g, "");
+  if (/^[+\d\s().-]{8,}$/.test(raw) && phoneDigits.length >= 8) {
+    return phoneDigits;
+  }
+
+  const telegramMatch = raw.match(/(?:https?:\/\/)?t\.me\/([a-z0-9_]{4,})/i);
+  if (telegramMatch) return `@${telegramMatch[1].toLowerCase()}`;
+
+  const usernameMatch = raw.match(/^@([a-z0-9_]{4,})$/i);
+  if (usernameMatch) return `@${usernameMatch[1].toLowerCase()}`;
+
+  try {
+    const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+    const parsed = new URL(withProtocol);
+    if (parsed.hostname && parsed.hostname.includes(".")) {
+      return parsed.hostname.toLowerCase().replace(/^www\./, "").replace(/\.$/, "");
+    }
+  } catch {}
+
+  return raw.slice(0, 220);
 }
 
 function extractFirstUrl(value = "") {
@@ -225,6 +318,73 @@ async function checkGoogleWebRisk(url) {
   }
 }
 
+async function checkPhishTank(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 6000);
+
+  try {
+    const body = new URLSearchParams();
+    body.set("url", url);
+    body.set("format", "json");
+    if (PHISHTANK_APP_KEY) body.set("app_key", PHISHTANK_APP_KEY);
+
+    const response = await fetch("https://checkurl.phishtank.com/checkurl/", {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "Accept": "application/json",
+        "User-Agent": "SafeDeal/1.0 (anti-fraud URL checker)"
+      },
+      body: body.toString()
+    });
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        status: response.status,
+        rateLimited: response.status === 509 || response.status === 429,
+        hasKey: Boolean(PHISHTANK_APP_KEY),
+        inDatabase: false,
+        verified: false,
+        valid: false
+      };
+    }
+
+    const data = await response.json();
+    const rawResults = data?.results || {};
+    const result = rawResults?.url0 || rawResults;
+    const toBool = (value) => {
+      if (value === true || value === 1) return true;
+      const normalized = String(value ?? "").trim().toLowerCase();
+      return ["true", "1", "y", "yes"].includes(normalized);
+    };
+
+    return {
+      ok: true,
+      status: response.status,
+      rateLimited: false,
+      hasKey: Boolean(PHISHTANK_APP_KEY),
+      inDatabase: toBool(result?.in_database),
+      verified: toBool(result?.verified),
+      valid: toBool(result?.valid),
+      phishId: result?.phish_id ? String(result.phish_id) : null
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error.name || "phishtank_failed",
+      rateLimited: false,
+      hasKey: Boolean(PHISHTANK_APP_KEY),
+      inDatabase: false,
+      verified: false,
+      valid: false
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function inspectUrl(rawUrl) {
   let parsed;
   try {
@@ -261,9 +421,10 @@ async function inspectUrl(rawUrl) {
     };
   }
 
-  const [rdap, webRisk] = await Promise.all([
+  const [rdap, webRisk, phishTank] = await Promise.all([
     lookupRdap(hostname),
-    checkGoogleWebRisk(rawUrl)
+    checkGoogleWebRisk(rawUrl),
+    checkPhishTank(rawUrl)
   ]);
 
   const reasons = [];
@@ -275,6 +436,21 @@ async function inspectUrl(rawUrl) {
     reasons.push("Посилання використовує HTTP замість HTTPS");
   } else {
     facts.push("Посилання використовує HTTPS");
+  }
+
+  if (parsed.username || parsed.password) {
+    points += 18;
+    reasons.push("URL містить логін або пароль перед адресою домену — це може маскувати справжню адресу");
+  }
+
+  if (net.isIP(hostname)) {
+    points += 14;
+    reasons.push("Замість доменного імені використовується пряма IP-адреса");
+  }
+
+  if (hostname.startsWith("xn--") || hostname.includes(".xn--")) {
+    points += 14;
+    reasons.push("Домен використовує Punycode; візуально він може імітувати іншу назву");
   }
 
   if (!dnsResult.ok) {
@@ -314,12 +490,30 @@ async function inspectUrl(rawUrl) {
     facts.push("Google Web Risk ще не підключений до SafeDeal");
   }
 
+  if (phishTank.ok) {
+    if (phishTank.inDatabase && phishTank.verified && phishTank.valid) {
+      points += 70;
+      reasons.push("PhishTank має підтверджений активний запис про фішинг для цього URL");
+    } else if (phishTank.inDatabase) {
+      points += 20;
+      reasons.push("URL є в базі PhishTank, але запис не підтверджений як активний фішинг");
+    } else {
+      facts.push("PhishTank не знайшов цей URL у своїй базі фішингу");
+    }
+  } else if (phishTank.rateLimited) {
+    facts.push("PhishTank тимчасово перевищив ліміт запитів; перевірка не виконана");
+  } else {
+    facts.push("PhishTank тимчасово не відповів; результат за цим джерелом невідомий");
+  }
+
   const suspiciousHostTokens = [
     "secure-login",
     "verify-account",
     "payment-confirm",
     "wallet-verify",
-    "bonus-gift"
+    "bonus-gift",
+    "account-verify",
+    "confirm-payment"
   ];
 
   if (suspiciousHostTokens.some((token) => hostname.includes(token))) {
@@ -330,6 +524,11 @@ async function inspectUrl(rawUrl) {
   if (hostname.split(".").length >= 5) {
     points += 6;
     reasons.push("Домен має незвично багато рівнів піддоменів");
+  }
+
+  if (["bit.ly", "tinyurl.com", "cutt.ly", "t.co", "is.gd"].includes(hostname)) {
+    points += 8;
+    reasons.push("Скорочене посилання приховує кінцеву адресу");
   }
 
   return {
@@ -344,14 +543,23 @@ async function inspectUrl(rawUrl) {
       registrationDate: rdap.registrationDate || null,
       domainAgeDays: rdap.ageDays ?? null,
       webRiskConfigured: webRisk.configured,
-      webRiskMatches: webRisk.matches.length
+      webRiskOk: Boolean(webRisk.ok),
+      webRiskStatus: webRisk.status || null,
+      webRiskMatches: webRisk.matches.length,
+      phishTankOk: Boolean(phishTank.ok),
+      phishTankHasKey: Boolean(phishTank.hasKey),
+      phishTankRateLimited: Boolean(phishTank.rateLimited),
+      phishTankInDatabase: Boolean(phishTank.inDatabase),
+      phishTankVerified: Boolean(phishTank.verified),
+      phishTankValid: Boolean(phishTank.valid),
+      phishTankPhishId: phishTank.phishId || null
     }
   };
 }
 
 function analyzeTextSignals(type, input) {
   const text = normalizeText(input);
-  let score = 12;
+  let score = 8;
   const reasons = [];
   const actions = new Set([
     "Не надсилайте паролі, PIN, CVV або коди з SMS.",
@@ -364,26 +572,26 @@ function analyzeTextSignals(type, input) {
   };
 
   const moneyPromises =
-    /\b(500|1000|2000)\s*(\$|usd|дол)|\bза\s*день\b|легк(і|ий)\s*гроші|без\s*досвіду/i;
+    /\b(500|1000|2000|3000|5000)\s*(\$|usd|дол)|\bза\s*день\b|легк(і|ий)\s*гроші|без\s*досвіду.*(висок|зароб)/i;
   const deposit =
-    /депозит|передоплат|активац|страхов(ий|ка)\s*внесок|внести\s*кошти/i;
+    /депозит|передоплат|активац|страхов(ий|ка)\s*внесок|внести\s*кошти|поповн(ити|ення)\s*баланс/i;
   const cardData =
-    /cvv|cvc|номер\s*карт|термін\s*дії|код\s*(з|із)\s*sms|pin|парол/i;
+    /cvv|cvc|номер\s*карт|термін\s*дії|код\s*(з|із)\s*sms|pin|парол|одноразов(ий|ого)\s*код/i;
   const urgency =
-    /терміново|прямо\s*зараз|10\s*хвилин|обмежен(а|ий)\s*час/i;
+    /терміново|прямо\s*зараз|10\s*хвилин|5\s*хвилин|обмежен(а|ий)\s*час|тільки\s*сьогодні/i;
   const suspiciousFile = /\.apk\b|\.exe\b|\.scr\b|\.msi\b|\.zip\b/i;
-  const shortener = /bit\.ly|tinyurl|t\.co|cutt\.ly|goo\.gl/i;
+  const shortener = /bit\.ly|tinyurl|t\.co|cutt\.ly|goo\.gl|is\.gd/i;
   const telegram = /t\.me\/|telegram|@\w{4,}/i;
 
-  if (moneyPromises.test(text)) add(24, "Нереалістична або агресивна обіцянка заробітку");
+  if (moneyPromises.test(text)) add(22, "Є агресивна або нереалістична обіцянка заробітку");
 
   if (deposit.test(text)) {
     add(26, "Просять депозит / передоплату / платну активацію");
-    actions.add("Не переказуйте гроші за «активацію роботи» або «страхування».");
+    actions.add("Не переказуйте гроші за «активацію роботи», «страхування» або доступ до завдань.");
   }
 
   if (cardData.test(text)) {
-    add(28, "Є запит на чутливі банківські або авторизаційні дані");
+    add(30, "Є запит на чутливі банківські або авторизаційні дані");
     actions.add("Не вводьте повні реквізити картки, CVV, PIN або SMS-коди.");
   }
 
@@ -397,19 +605,114 @@ function analyzeTextSignals(type, input) {
     add(8, "Використовується скорочене посилання, яке приховує кінцеву адресу");
   }
 
-  if (telegram.test(text) && type === "job") {
-    add(6, "Вакансія веде в Telegram без достатньої інформації про роботодавця");
+  if (type === "job") {
+    if (telegram.test(text)) {
+      add(6, "Вакансія переводить спілкування в Telegram");
+    }
+
+    if (/став(ити|те)\s*лайк|оцінювати\s*товар|викуп\s*товар|task\s*scam|виконувати\s*завдання.*комісі/i.test(text)) {
+      add(24, "Опис схожий на схему з платними завданнями / фіктивним викупом товару");
+      actions.add("Не поповнюйте баланс і не «викуповуйте» товари за власні кошти для отримання комісії.");
+    }
+
+    if (/отримувати\s*переказ|приймати\s*гроші.*карт|транзит.*карт|передавати\s*кошти.*далі/i.test(text)) {
+      add(30, "Пропонують використовувати вашу картку для приймання або транзиту чужих коштів");
+      actions.add("Не використовуйте особисту картку як транзитний рахунок для незнайомих осіб.");
+    }
+
+    if (/без\s*співбесід|без\s*резюме|без\s*оформлення|без\s*договору/i.test(text)) {
+      add(8, "Є ознаки роботи без звичайної перевірки роботодавця або оформлення");
+    }
   }
 
-  if (type === "seller" && /передоплат|на\s*карт|скиньте\s*кошти/i.test(text)) {
-    add(16, "Продавець наполягає на передоплаті або прямому переказі");
+  if (type === "seller") {
+    if (/тільки\s*передоплат|повн(а|у)\s*передоплат|без\s*налож|на\s*карт(у|ку)|скиньте\s*кошти/i.test(text)) {
+      add(18, "Продавець наполягає на передоплаті або прямому переказі");
+      actions.add("За можливості використовуйте післяплату або сервіс із захистом покупця.");
+    }
+
+    if (/ціна.*(на\s*)?(30|40|50|60|70)%.*ниж|вдвічі\s*дешев|значно\s*дешевше\s*ринку/i.test(text)) {
+      add(14, "Заявлена ціна виглядає суттєво нижчою за типову");
+    }
+
+    if (/не\s*можу.*відео|без\s*відеодзвін|не\s*покажу.*товар/i.test(text)) {
+      add(10, "Продавець уникає додаткової перевірки товару");
+    }
+  }
+
+  if (type === "contact") {
+    if (/перейдімо|пиши|напиши.*(telegram|whatsapp|вайбер|viber)/i.test(text)) {
+      add(5, "Співрозмовник намагається перевести контакт в інший месенджер");
+    }
   }
 
   return { score, reasons, actions };
 }
 
+async function getApprovedDbReports() {
+  if (!databaseReady || !pool) return [];
+  try {
+    const { rows } = await pool.query(`
+      SELECT code, target, target_key, type, reason, details, status, updated_at
+      FROM community_reports
+      WHERE status = 'approved'
+      ORDER BY updated_at DESC
+      LIMIT 500
+    `);
+    return rows.map((row) => ({
+      code: row.code,
+      target: row.target,
+      targetKey: row.target_key,
+      type: row.type,
+      reason: row.reason,
+      details: row.details,
+      status: row.status,
+      statusLabel: "Перевірено модерацією",
+      updatedAt: new Date(row.updated_at).toLocaleDateString("uk-UA")
+    }));
+  } catch (error) {
+    console.error("Approved reports query failed:", error.message);
+    return [];
+  }
+}
+
+async function findCommunityMatches(input) {
+  const text = normalizeText(input);
+  const candidates = new Set();
+
+  const url = extractFirstUrl(input);
+  if (url) {
+    try {
+      candidates.add(new URL(url).hostname.toLowerCase().replace(/^www\./, ""));
+    } catch {}
+  }
+
+  for (const match of text.matchAll(/@([a-z0-9_]{4,})/gi)) {
+    candidates.add(`@${match[1].toLowerCase()}`);
+  }
+
+  for (const match of text.matchAll(/[+\d][\d\s().-]{7,}/g)) {
+    const digits = match[0].replace(/\D/g, "");
+    if (digits.length >= 8) candidates.add(digits);
+  }
+
+  for (const match of text.matchAll(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi)) {
+    candidates.add(match[0].toLowerCase());
+  }
+
+  const approved = [...demoApprovedReports, ...(await getApprovedDbReports())];
+  const matches = approved.filter((report) => {
+    const key = normalizeTargetKey(report.targetKey || report.target);
+    if (!key) return false;
+    return candidates.has(key) || (key.length >= 8 && text.includes(key));
+  });
+
+  return matches;
+}
+
 async function analyzeInput(type, input) {
-  const textAnalysis = analyzeTextSignals(type, input);
+  const safeType = ALLOWED_TYPES.has(type) ? type : "seller";
+  const textAnalysis = analyzeTextSignals(safeType, input);
   let score = textAnalysis.score;
   const reasons = [...textAnalysis.reasons];
   const facts = [];
@@ -430,9 +733,20 @@ async function analyzeInput(type, input) {
       reasons.push(...urlAnalysis.reasons);
       technical = urlAnalysis.technical;
     }
-  } else if (type === "link") {
+  } else if (safeType === "link") {
     reasons.push("У введених даних не знайдено коректного URL");
     score += 8;
+  }
+
+  const communityMatches = await findCommunityMatches(input);
+  if (communityMatches.length) {
+    const moderatedMatches = communityMatches.filter((x) => !String(x.code).startsWith("DEMO-"));
+    if (moderatedMatches.length) {
+      const points = Math.min(28, 12 + (moderatedMatches.length - 1) * 5);
+      score += points;
+      reasons.push(`У модерованій базі SafeDeal знайдено збігів: ${moderatedMatches.length}`);
+      actions.add("Перегляньте записи в базі скарг і перевірте факти перед оплатою або передачею даних.");
+    }
   }
 
   score = Math.max(0, Math.min(100, score));
@@ -446,16 +760,67 @@ async function analyzeInput(type, input) {
 
   return {
     id: `R-${Date.now().toString().slice(-6)}`,
-    type,
+    type: safeType,
     score,
     level,
     label,
-    reasons,
-    facts,
+    reasons: [...new Set(reasons)],
+    facts: [...new Set(facts)],
     actions: [...actions],
     technical,
+    communityMatches: communityMatches.length,
     disclaimer:
-      "Це автоматична оцінка ризику, а не юридичний висновок і не гарантія безпеки."
+      "Це автоматична оцінка ризику, а не твердження про шахрайство, юридичний висновок чи гарантія безпеки. Перевіряйте факти самостійно."
+  };
+}
+
+function makeReportCode() {
+  return `C-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+}
+
+function validateReportBody(body = {}) {
+  const target = compactSpaces(body.target || "");
+  const type = ALLOWED_TYPES.has(body.type) && body.type !== "text" ? body.type : "seller";
+  const reason = compactSpaces(body.reason || "");
+  const details = compactSpaces(body.details || "");
+
+  if (target.length < 3 || target.length > 240) return { ok: false, error: "invalid_target" };
+  if (reason.length < 5 || reason.length > 500) return { ok: false, error: "invalid_reason" };
+  if (details.length > 2000) return { ok: false, error: "details_too_long" };
+
+  const forbiddenSecrets = /\b(cvv|cvc|pin)\b|код\s*(з|із)\s*sms|парол/i;
+  if (forbiddenSecrets.test(`${reason} ${details}`)) {
+    return { ok: false, error: "sensitive_data_not_allowed" };
+  }
+
+  return {
+    ok: true,
+    target,
+    targetKey: normalizeTargetKey(target),
+    type,
+    reason,
+    details
+  };
+}
+
+const rateBuckets = new Map();
+function rateLimit({ windowMs = 60 * 60 * 1000, max = 80 } = {}) {
+  return (req, res, next) => {
+    const key = req.ip || req.socket.remoteAddress || "unknown";
+    const now = Date.now();
+    const current = rateBuckets.get(key);
+
+    if (!current || current.resetAt <= now) {
+      rateBuckets.set(key, { count: 1, resetAt: now + windowMs });
+      return next();
+    }
+
+    current.count += 1;
+    if (current.count > max) {
+      return res.status(429).json({ ok: false, error: "rate_limited" });
+    }
+
+    next();
   };
 }
 
@@ -463,19 +828,117 @@ app.get("/api/health", (req, res) => {
   res.json({
     ok: true,
     service: "safedeal",
-    webRiskConfigured: Boolean(GOOGLE_WEB_RISK_API_KEY)
+    webRiskConfigured: Boolean(GOOGLE_WEB_RISK_API_KEY),
+    phishTankEnabled: true,
+    phishTankKeyConfigured: Boolean(PHISHTANK_APP_KEY),
+    databaseConfigured: Boolean(DATABASE_URL),
+    databaseReady
   });
 });
 
 app.get("/api/community-alerts", (req, res) => {
-  res.json({ ok: true, items: sampleReports });
+  res.json({ ok: true, items: demoAlerts, demo: true });
 });
 
-app.post("/api/check", async (req, res) => {
+app.get("/api/reports", async (req, res) => {
+  const q = normalizeText(req.query.q || "").slice(0, 200);
+  const type = String(req.query.type || "all");
+
+  try {
+    const dbItems = await getApprovedDbReports();
+    const all = [...dbItems, ...demoApprovedReports];
+    const items = all
+      .filter((item) => type === "all" || item.type === type)
+      .filter((item) => {
+        if (!q) return true;
+        return normalizeText(`${item.target} ${item.reason} ${item.details || ""}`).includes(q);
+      })
+      .slice(0, 50);
+
+    res.json({
+      ok: true,
+      items,
+      demo: items.some((x) => String(x.code).startsWith("DEMO-")),
+      databaseReady
+    });
+  } catch (error) {
+    console.error("Reports search error:", error);
+    res.status(500).json({ ok: false, error: "reports_failed" });
+  }
+});
+
+app.post("/api/reports", rateLimit({ max: 20 }), async (req, res) => {
+  const valid = validateReportBody(req.body || {});
+  if (!valid.ok) {
+    return res.status(400).json({ ok: false, error: valid.error });
+  }
+
+  const code = makeReportCode();
+  const report = {
+    code,
+    target: valid.target,
+    targetKey: valid.targetKey,
+    type: valid.type,
+    reason: valid.reason,
+    details: valid.details,
+    status: "pending",
+    createdAt: new Date().toISOString()
+  };
+
+  try {
+    if (databaseReady && pool) {
+      await pool.query(
+        `INSERT INTO community_reports
+          (code, target, target_key, type, reason, details, status)
+         VALUES ($1, $2, $3, $4, $5, $6, 'pending')`,
+        [code, valid.target, valid.targetKey, valid.type, valid.reason, valid.details]
+      );
+    } else {
+      memoryPendingReports.unshift(report);
+      if (memoryPendingReports.length > 200) memoryPendingReports.pop();
+    }
+
+    res.status(201).json({
+      ok: true,
+      report: { code, status: "pending" },
+      persistent: databaseReady
+    });
+  } catch (error) {
+    console.error("Report submit error:", error);
+    res.status(500).json({ ok: false, error: "report_submit_failed" });
+  }
+});
+
+app.get("/api/reports/status/:code", async (req, res) => {
+  const code = String(req.params.code || "").slice(0, 80);
+
+  try {
+    if (databaseReady && pool) {
+      const { rows } = await pool.query(
+        `SELECT code, status, created_at, updated_at FROM community_reports WHERE code = $1 LIMIT 1`,
+        [code]
+      );
+      if (!rows.length) return res.status(404).json({ ok: false, error: "not_found" });
+      return res.json({ ok: true, report: rows[0] });
+    }
+
+    const found = memoryPendingReports.find((x) => x.code === code);
+    if (!found) return res.status(404).json({ ok: false, error: "not_found" });
+    res.json({ ok: true, report: { code: found.code, status: found.status, createdAt: found.createdAt } });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "status_failed" });
+  }
+});
+
+app.post("/api/check", rateLimit({ max: 80 }), async (req, res) => {
   const { type = "seller", input = "" } = req.body || {};
 
   if (!String(input).trim()) {
     return res.status(400).json({ ok: false, error: "input_required" });
+  }
+
+  if (String(input).length > 12000) {
+    return res.status(413).json({ ok: false, error: "input_too_long" });
   }
 
   try {
@@ -493,9 +956,17 @@ app.get("*", (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
 });
 
-app.listen(PORT, () => {
-  console.log(`SafeDeal started on port ${PORT}`);
-  console.log(
-    `Google Web Risk: ${GOOGLE_WEB_RISK_API_KEY ? "configured" : "not configured"}`
-  );
+async function start() {
+  await initDatabase();
+  app.listen(PORT, () => {
+    console.log(`SafeDeal started on port ${PORT}`);
+    console.log(`Google Web Risk: ${GOOGLE_WEB_RISK_API_KEY ? "configured" : "not configured"}`);
+    console.log(`PhishTank: enabled (${PHISHTANK_APP_KEY ? "API key configured" : "keyless / lower rate limit"})`);
+    console.log(`Database: ${databaseReady ? "ready" : DATABASE_URL ? "configured but unavailable" : "not configured"}`);
+  });
+}
+
+start().catch((error) => {
+  console.error("SafeDeal startup error:", error);
+  process.exit(1);
 });
