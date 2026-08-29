@@ -7,6 +7,7 @@ const net = require("net");
 const http = require("http");
 const https = require("https");
 const tls = require("tls");
+const crypto = require("crypto");
 const { domainToUnicode } = require("url");
 const helmet = require("helmet");
 const compression = require("compression");
@@ -21,6 +22,7 @@ const PHISHTANK_APP_KEY = process.env.PHISHTANK_APP_KEY || "";
 const URLHAUS_AUTH_KEY = process.env.URLHAUS_AUTH_KEY || "";
 const ABUSECH_AUTH_KEY = process.env.ABUSECH_AUTH_KEY || URLHAUS_AUTH_KEY;
 const DATABASE_URL = process.env.DATABASE_URL || "";
+const ADMIN_KEY = process.env.ADMIN_KEY || "";
 
 app.set("trust proxy", 1);
 app.use(helmet({ contentSecurityPolicy: false }));
@@ -113,6 +115,8 @@ async function initDatabase() {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `);
+    await pool.query(`ALTER TABLE community_reports ADD COLUMN IF NOT EXISTS moderator_note TEXT NOT NULL DEFAULT ''`);
+    await pool.query(`ALTER TABLE community_reports ADD COLUMN IF NOT EXISTS moderated_at TIMESTAMPTZ`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_reports_target_key ON community_reports(target_key)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_reports_status ON community_reports(status)`);
     databaseReady = true;
@@ -2077,6 +2081,26 @@ function validateReportBody(body = {}) {
 }
 
 const rateBuckets = new Map();
+function safeSecretEquals(a, b) {
+  const left = Buffer.from(String(a || ""));
+  const right = Buffer.from(String(b || ""));
+  if (!left.length || left.length !== right.length) return false;
+  return crypto.timingSafeEqual(left, right);
+}
+
+function requireAdmin(req, res, next) {
+  if (!ADMIN_KEY) {
+    return res.status(503).json({ ok: false, error: "admin_not_configured" });
+  }
+
+  const supplied = String(req.get("x-admin-key") || "");
+  if (!safeSecretEquals(supplied, ADMIN_KEY)) {
+    return res.status(401).json({ ok: false, error: "unauthorized" });
+  }
+
+  next();
+}
+
 function rateLimit({ windowMs = 60 * 60 * 1000, max = 80 } = {}) {
   return (req, res, next) => {
     const key = req.ip || req.socket.remoteAddress || "unknown";
@@ -2107,7 +2131,8 @@ app.get("/api/health", (req, res) => {
     urlHausConfigured: Boolean(URLHAUS_AUTH_KEY),
     threatFoxConfigured: Boolean(ABUSECH_AUTH_KEY),
     databaseConfigured: Boolean(DATABASE_URL),
-    databaseReady
+    databaseReady,
+    adminConfigured: Boolean(ADMIN_KEY)
   });
 });
 
@@ -2205,6 +2230,76 @@ app.get("/api/reports/status/:code", async (req, res) => {
   }
 });
 
+app.get("/api/admin/reports", requireAdmin, rateLimit({ max: 240 }), async (req, res) => {
+  if (!databaseReady || !pool) {
+    return res.status(503).json({ ok: false, error: "database_unavailable" });
+  }
+
+  const requestedStatus = String(req.query.status || "pending").toLowerCase();
+  const allowedStatuses = new Set(["pending", "approved", "rejected", "all"]);
+  const status = allowedStatuses.has(requestedStatus) ? requestedStatus : "pending";
+
+  try {
+    const params = [];
+    const where = status === "all" ? "" : "WHERE status = $1";
+    if (status !== "all") params.push(status);
+
+    const { rows } = await pool.query(
+      `SELECT id, code, target, target_key, type, reason, details, status,
+              moderator_note, moderated_at, created_at, updated_at
+       FROM community_reports
+       ${where}
+       ORDER BY created_at DESC
+       LIMIT 200`,
+      params
+    );
+
+    res.json({ ok: true, items: rows, status });
+  } catch (error) {
+    console.error("Admin reports load error:", error);
+    res.status(500).json({ ok: false, error: "admin_reports_failed" });
+  }
+});
+
+app.patch("/api/admin/reports/:code", requireAdmin, rateLimit({ max: 240 }), async (req, res) => {
+  if (!databaseReady || !pool) {
+    return res.status(503).json({ ok: false, error: "database_unavailable" });
+  }
+
+  const code = String(req.params.code || "").slice(0, 80);
+  const status = String(req.body?.status || "").toLowerCase();
+  const moderatorNote = compactSpaces(req.body?.note || "").slice(0, 1000);
+
+  if (!new Set(["approved", "rejected", "pending"]).has(status)) {
+    return res.status(400).json({ ok: false, error: "invalid_status" });
+  }
+
+  try {
+    const { rows } = await pool.query(
+      `UPDATE community_reports
+       SET status = $1,
+           moderator_note = $2,
+           moderated_at = CASE WHEN $1 = 'pending' THEN NULL ELSE NOW() END,
+           updated_at = NOW()
+       WHERE code = $3
+       RETURNING code, target, type, reason, details, status, moderator_note,
+                 moderated_at, created_at, updated_at`,
+      [status, moderatorNote, code]
+    );
+
+    if (!rows.length) return res.status(404).json({ ok: false, error: "not_found" });
+    res.json({ ok: true, report: rows[0] });
+  } catch (error) {
+    console.error("Admin report update error:", error);
+    res.status(500).json({ ok: false, error: "admin_update_failed" });
+  }
+});
+
+app.get("/admin", (req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.sendFile(path.join(__dirname, "admin.html"));
+});
+
 app.post("/api/check", rateLimit({ max: 80 }), async (req, res) => {
   const { type = "seller", input = "" } = req.body || {};
 
@@ -2240,6 +2335,7 @@ async function start() {
     console.log(`URLhaus: ${URLHAUS_AUTH_KEY ? "configured" : "not configured"}`);
     console.log(`ThreatFox: ${ABUSECH_AUTH_KEY ? "configured" : "not configured"}`);
     console.log(`Database: ${databaseReady ? "ready" : DATABASE_URL ? "configured but unavailable" : "not configured"}`);
+    console.log(`Admin moderation: ${ADMIN_KEY ? "configured" : "not configured"}`);
   });
 }
 
