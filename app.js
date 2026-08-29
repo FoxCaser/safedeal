@@ -198,6 +198,21 @@ $("#runCheck").addEventListener("click", async () => {
                   ? `На хості є malware URL (${t.urlHausHostUrlCount || 1})`
                   : "Збігів немає";
 
+      const threatFoxText =
+        t.threatFoxConfigured === false
+          ? "Не підключено"
+          : t.threatFoxAuthError
+            ? "Помилка Auth-Key"
+            : !t.threatFoxOk
+              ? "Тимчасово недоступно"
+              : t.threatFoxMatch
+                ? [
+                    t.threatFoxMatchType === "url" ? "IOC для URL" : "IOC для домену",
+                    t.threatFoxMalware ? `— ${t.threatFoxMalware}` : "",
+                    Number.isFinite(t.threatFoxConfidence) ? `(${t.threatFoxConfidence}%)` : ""
+                  ].filter(Boolean).join(" ")
+                : "Збігів немає";
+
       const spoofText =
         t.brandImpersonation
           ? `Схоже на ${t.brandTarget || "відомий бренд"}`
@@ -276,6 +291,7 @@ $("#runCheck").addEventListener("click", async () => {
         <div class="tech-item"><span>🎣 PhishTank</span><b>${escapeHtml(phishTankText)}</b></div>
         <div class="tech-item"><span>🧨 PhishDestroy</span><b>${escapeHtml(phishDestroyText)}</b></div>
         <div class="tech-item"><span>🦠 URLhaus</span><b>${escapeHtml(urlHausText)}</b></div>
+        <div class="tech-item"><span>🕷️ ThreatFox</span><b>${escapeHtml(threatFoxText)}</b></div>
         <div class="tech-item"><span>🔐 SSL/TLS</span><b>${escapeHtml(sslText)}</b></div>
         <div class="tech-item"><span>↪️ Редиректи</span><b>${escapeHtml(redirectText)}</b></div>
         <div class="tech-item"><span>🧾 Форми</span><b>${escapeHtml(formsText)}</b></div>

@@ -19,6 +19,7 @@ const PORT = process.env.PORT || 3000;
 const GOOGLE_WEB_RISK_API_KEY = process.env.GOOGLE_WEB_RISK_API_KEY || "";
 const PHISHTANK_APP_KEY = process.env.PHISHTANK_APP_KEY || "";
 const URLHAUS_AUTH_KEY = process.env.URLHAUS_AUTH_KEY || "";
+const ABUSECH_AUTH_KEY = process.env.ABUSECH_AUTH_KEY || URLHAUS_AUTH_KEY;
 const DATABASE_URL = process.env.DATABASE_URL || "";
 
 app.set("trust proxy", 1);
@@ -1191,6 +1192,150 @@ async function checkUrlHaus(rawUrl, hostname) {
   };
 }
 
+
+async function checkThreatFox(rawUrl, hostname) {
+  if (!ABUSECH_AUTH_KEY) {
+    return {
+      configured: false,
+      ok: false,
+      authError: false,
+      match: false,
+      matchType: null,
+      item: null
+    };
+  }
+
+  const search = async (term) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 7000);
+
+    try {
+      const response = await fetch("https://threatfox-api.abuse.ch/api/v1/", {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "Auth-Key": ABUSECH_AUTH_KEY,
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+          "User-Agent": "SafeDeal/1.0"
+        },
+        body: JSON.stringify({
+          query: "search_ioc",
+          search_term: term,
+          exact_match: true
+        })
+      });
+
+      if (!response.ok) {
+        return {
+          ok: false,
+          status: response.status,
+          authError: response.status === 401 || response.status === 403,
+          data: null
+        };
+      }
+
+      const data = await response.json();
+      return { ok: true, status: response.status, authError: false, data };
+    } catch (error) {
+      return {
+        ok: false,
+        status: null,
+        authError: false,
+        error: error.name || "threatfox_failed",
+        data: null
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  const summarize = (result, matchType) => {
+    if (!result?.ok) return null;
+
+    const status = String(result.data?.query_status || "").toLowerCase();
+    const rows = Array.isArray(result.data?.data) ? result.data.data : [];
+
+    if (status !== "ok" || rows.length === 0) {
+      return {
+        configured: true,
+        ok: true,
+        authError: false,
+        match: false,
+        matchType: null,
+        queryStatus: status || "no_result",
+        item: null
+      };
+    }
+
+    const first = rows[0] || {};
+    return {
+      configured: true,
+      ok: true,
+      authError: false,
+      match: true,
+      matchType,
+      queryStatus: status,
+      item: {
+        ioc: first.ioc ? String(first.ioc) : null,
+        iocType: first.ioc_type ? String(first.ioc_type) : null,
+        threatType: first.threat_type ? String(first.threat_type) : null,
+        threatTypeDesc: first.threat_type_desc ? String(first.threat_type_desc) : null,
+        malware: first.malware_printable ? String(first.malware_printable)
+          : first.malware ? String(first.malware)
+          : null,
+        confidence: Number.isFinite(Number(first.confidence_level))
+          ? Number(first.confidence_level)
+          : null,
+        firstSeen: first.first_seen ? String(first.first_seen) : null,
+        lastSeen: first.last_seen ? String(first.last_seen) : null,
+        reference: first.reference ? String(first.reference) : null
+      }
+    };
+  };
+
+  const exactUrl = await search(rawUrl);
+  if (!exactUrl.ok) {
+    return {
+      configured: true,
+      ok: false,
+      authError: Boolean(exactUrl.authError),
+      status: exactUrl.status || null,
+      error: exactUrl.error || null,
+      match: false,
+      matchType: null,
+      item: null
+    };
+  }
+
+  const urlSummary = summarize(exactUrl, "url");
+  if (urlSummary?.match) return urlSummary;
+
+  const domain = await search(hostname);
+  if (!domain.ok) {
+    return {
+      configured: true,
+      ok: false,
+      authError: Boolean(domain.authError),
+      status: domain.status || null,
+      error: domain.error || null,
+      match: false,
+      matchType: null,
+      item: null
+    };
+  }
+
+  const domainSummary = summarize(domain, "domain");
+  return domainSummary || {
+    configured: true,
+    ok: true,
+    authError: false,
+    match: false,
+    matchType: null,
+    item: null
+  };
+}
+
 async function checkPhishDestroy(hostname) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 6000);
@@ -1270,12 +1415,13 @@ async function inspectUrl(rawUrl) {
     };
   }
 
-  const [rdap, webRisk, phishTank, phishDestroy, urlHaus, remotePage] = await Promise.all([
+  const [rdap, webRisk, phishTank, phishDestroy, urlHaus, threatFox, remotePage] = await Promise.all([
     lookupRdap(hostname),
     checkGoogleWebRisk(rawUrl),
     checkPhishTank(rawUrl),
     checkPhishDestroy(hostname),
     checkUrlHaus(rawUrl, hostname),
+    checkThreatFox(rawUrl, hostname),
     inspectRemotePage(rawUrl)
   ]);
 
@@ -1438,6 +1584,39 @@ async function inspectUrl(rawUrl) {
     reasons.push(`URLhaus знає ${urlHaus.hostUrlCount || 1} шкідливих URL на цьому хості; точного збігу поточного URL немає`);
   } else {
     facts.push("URLhaus не знайшов точного URL або відомих malware-URL на цьому хості");
+  }
+
+  if (!threatFox.configured) {
+    facts.push("ThreatFox ще не підключений до SafeDeal");
+  } else if (!threatFox.ok) {
+    if (threatFox.authError) {
+      facts.push("ThreatFox не прийняв abuse.ch Auth-Key; перевір ключ у Render");
+    } else {
+      facts.push("ThreatFox тимчасово не відповів; результат за цим джерелом невідомий");
+    }
+  } else if (threatFox.match) {
+    const confidence = Number(threatFox.item?.confidence);
+    const confidenceBonus = Number.isFinite(confidence)
+      ? (confidence >= 90 ? 8 : confidence >= 70 ? 4 : 0)
+      : 0;
+    const basePoints = threatFox.matchType === "url" ? 68 : 52;
+    points += basePoints + confidenceBonus;
+
+    const malwareText = threatFox.item?.malware
+      ? `; пов’язано з ${threatFox.item.malware}`
+      : "";
+    const typeText = threatFox.item?.threatTypeDesc || threatFox.item?.threatType || "відомим IOC";
+    reasons.push(
+      threatFox.matchType === "url"
+        ? `ThreatFox має точний IOC для цього URL (${typeText}${malwareText})`
+        : `ThreatFox має активний IOC для домену ${hostname} (${typeText}${malwareText})`
+    );
+
+    if (Number.isFinite(confidence)) {
+      facts.push(`ThreatFox: confidence ${confidence}%`);
+    }
+  } else {
+    facts.push("ThreatFox не знайшов активного IOC для цього URL або домену");
   }
 
   if (remotePage.ok) {
@@ -1604,6 +1783,19 @@ async function inspectUrl(rawUrl) {
       urlHausThreat: urlHaus.threat || null,
       urlHausHostMatch: Boolean(urlHaus.hostMatch),
       urlHausHostUrlCount: Number(urlHaus.hostUrlCount || 0),
+      threatFoxConfigured: Boolean(threatFox.configured),
+      threatFoxOk: Boolean(threatFox.ok),
+      threatFoxAuthError: Boolean(threatFox.authError),
+      threatFoxMatch: Boolean(threatFox.match),
+      threatFoxMatchType: threatFox.matchType || null,
+      threatFoxIoc: threatFox.item?.ioc || null,
+      threatFoxIocType: threatFox.item?.iocType || null,
+      threatFoxThreatType: threatFox.item?.threatType || null,
+      threatFoxThreatTypeDesc: threatFox.item?.threatTypeDesc || null,
+      threatFoxMalware: threatFox.item?.malware || null,
+      threatFoxConfidence: Number.isFinite(Number(threatFox.item?.confidence))
+        ? Number(threatFox.item.confidence)
+        : null,
       rdapSource: rdap.source || null,
       pageScanOk: Boolean(remotePage.ok),
       pageScanError: remotePage.error || null,
@@ -1913,6 +2105,7 @@ app.get("/api/health", (req, res) => {
     phishTankEnabled: true,
     phishTankKeyConfigured: Boolean(PHISHTANK_APP_KEY),
     urlHausConfigured: Boolean(URLHAUS_AUTH_KEY),
+    threatFoxConfigured: Boolean(ABUSECH_AUTH_KEY),
     databaseConfigured: Boolean(DATABASE_URL),
     databaseReady
   });
@@ -2045,6 +2238,7 @@ async function start() {
     console.log(`Google Web Risk: ${GOOGLE_WEB_RISK_API_KEY ? "configured" : "not configured"}`);
     console.log(`PhishTank: enabled (${PHISHTANK_APP_KEY ? "API key configured" : "keyless / lower rate limit"})`);
     console.log(`URLhaus: ${URLHAUS_AUTH_KEY ? "configured" : "not configured"}`);
+    console.log(`ThreatFox: ${ABUSECH_AUTH_KEY ? "configured" : "not configured"}`);
     console.log(`Database: ${databaseReady ? "ready" : DATABASE_URL ? "configured but unavailable" : "not configured"}`);
   });
 }
