@@ -455,3 +455,239 @@ textarea:focus{border-color:#3d78ff}.privacy-note{margin:10px 0;padding:10px 12p
 }
 
 @media(max-width:650px){.verdict-box{grid-template-columns:38px 1fr;padding:12px}.verdict-icon{width:38px;height:38px}.verdict-head{display:block}.verdict-head span{display:inline-block;margin-top:6px}.verdict-head h4{font-size:15px}}
+
+/* v7 launch candidate */
+.site-footer{display:flex;justify-content:space-between;gap:18px;align-items:center;margin:26px 0 90px;padding:18px 2px;color:var(--muted);font-size:12px;border-top:1px solid var(--line)}
+.site-footer div{display:flex;gap:16px;flex-wrap:wrap}.site-footer a{color:#8ec2ff;text-decoration:none}.site-footer a:hover{text-decoration:underline}
+@media(max-width:700px){.site-footer{display:grid;gap:10px;margin-bottom:90px}.site-footer div{gap:12px}}
+
+
+/* =========================================================
+   SafeDeal v7.1 Premium UI
+   Visual redesign only. Functional IDs/classes remain intact.
+   ========================================================= */
+
+:root{
+  --premium-bg:#050a12;
+  --premium-panel:#0b1420;
+  --premium-panel-2:#0e1927;
+  --premium-border:#1b2b3f;
+  --premium-text:#f7f9fc;
+  --premium-muted:#94a3b8;
+  --premium-blue:#32b5ff;
+  --premium-violet:#7647ff;
+  --premium-purple:#a24cff;
+  --premium-green:#38d889;
+}
+
+body{
+  background:
+    radial-gradient(850px 650px at 35% 5%,rgba(97,63,255,.18),transparent 62%),
+    radial-gradient(600px 520px at 88% 28%,rgba(25,168,255,.08),transparent 66%),
+    linear-gradient(180deg,#040810,#07101a 55%,#050a12 100%) !important;
+  color:var(--premium-text);
+}
+
+.app-shell{max-width:1540px;margin:0 auto;min-height:100vh}
+.sidebar{
+  background:rgba(5,10,18,.86);
+  backdrop-filter:blur(18px);
+  border-right:1px solid rgba(110,137,170,.13);
+}
+.brand-mark{
+  background:linear-gradient(145deg,var(--premium-purple),var(--premium-blue)) !important;
+  box-shadow:0 0 30px rgba(85,102,255,.32)
+}
+.nav-btn{
+  border-radius:12px !important;
+  border:1px solid transparent !important;
+}
+.nav-btn:hover,.nav-btn.active{
+  background:linear-gradient(135deg,rgba(99,65,255,.18),rgba(45,169,255,.10)) !important;
+  border-color:rgba(93,119,255,.25) !important;
+}
+.main{background:transparent !important}
+.topbar{
+  background:rgba(5,10,18,.76) !important;
+  backdrop-filter:blur(18px);
+  border-bottom:1px solid rgba(255,255,255,.04) !important;
+}
+.topbar h1{font-size:clamp(22px,2.3vw,36px);letter-spacing:-.025em}
+
+.premium-hero{
+  min-height:530px;
+  display:grid;
+  grid-template-columns:minmax(0,1.1fr) minmax(320px,.9fr);
+  gap:36px;
+  align-items:center;
+  padding:46px 40px;
+  border:1px solid var(--premium-border);
+  border-radius:26px;
+  overflow:hidden;
+  position:relative;
+  background:
+    radial-gradient(450px 370px at 77% 47%,rgba(90,55,255,.23),transparent 70%),
+    linear-gradient(135deg,rgba(9,17,29,.98),rgba(7,14,25,.94));
+  box-shadow:0 30px 90px rgba(0,0,0,.22);
+}
+.premium-hero:before{
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(115deg,rgba(255,255,255,.025),transparent 32%);
+}
+.launch-pill{
+  display:inline-flex;padding:8px 14px;border-radius:999px;
+  font-size:11px;letter-spacing:.12em;font-weight:800;
+  color:#bfeaff;border:1px solid rgba(51,181,255,.28);
+  background:rgba(25,108,160,.10)
+}
+.premium-hero h2{
+  font-size:clamp(46px,5.2vw,78px);
+  line-height:.98;letter-spacing:-.05em;margin:23px 0 24px;
+}
+.premium-hero h2 em{
+  font-style:normal;
+  background:linear-gradient(90deg,#bc54ff,#526fff 70%,#36baff);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+.premium-hero p{
+  max-width:650px;font-size:18px;line-height:1.65;color:#aab8c8;margin:0;
+}
+.hero-actions{display:flex;gap:14px;flex-wrap:wrap;margin-top:29px}
+.hero-primary{
+  box-shadow:0 13px 35px rgba(77,83,255,.31) !important;
+  background:linear-gradient(135deg,#8b42f6,#3c7cff) !important
+}
+.ghost-button{
+  padding:14px 20px;border-radius:11px;border:1px solid #253650;
+  color:#eaf1f8;background:#0a1421;cursor:pointer;font-weight:700
+}
+.trust-strip{display:flex;gap:12px;flex-wrap:wrap;margin-top:33px}
+.trust-strip span{
+  color:#9fadc0;font-size:12px;padding:8px 10px;border-radius:9px;
+  background:rgba(16,29,45,.72);border:1px solid rgba(100,126,160,.13)
+}
+
+.premium-device-zone{min-height:430px;position:relative;display:grid;place-items:center}
+.orbit{
+  position:absolute;border-radius:50%;border:1px solid rgba(99,80,255,.25);
+  box-shadow:inset 0 0 50px rgba(61,94,255,.06)
+}
+.orbit-one{width:365px;height:365px}.orbit-two{width:275px;height:275px}
+.device{
+  position:relative;z-index:3;width:220px;height:430px;border-radius:38px;padding:9px;
+  transform:rotate(7deg);
+  background:linear-gradient(145deg,#454c57,#080b10 32%,#1d2530 71%,#05070a);
+  border:2px solid #4e5864;
+  box-shadow:0 35px 70px rgba(0,0,0,.55),0 0 48px rgba(83,59,255,.28)
+}
+.device-screen{
+  height:100%;border-radius:29px;padding:14px;
+  background:linear-gradient(180deg,#06101b,#0a111b);
+  text-align:center;overflow:hidden
+}
+.device-notch{height:20px;width:88px;border-radius:13px;background:#020406;margin:-8px auto 25px}
+.device-brand{text-align:left;font-weight:850;font-size:14px}
+.device-shield{
+  width:116px;height:116px;border-radius:50%;display:grid;place-items:center;margin:62px auto 26px;
+  font-size:50px;color:#8ee4ff;border:2px solid #674dff;
+  box-shadow:0 0 28px rgba(98,75,255,.52),inset 0 0 28px rgba(39,118,255,.20)
+}
+.device-screen strong{display:block;font-size:17px}.device-screen small{color:#8392a4;font-size:9px}
+.device-search{margin-top:30px;padding:11px 7px;border:1px solid #263447;border-radius:8px;color:#69798b;font-size:8px}
+.device-action{margin-top:11px;padding:11px;border-radius:8px;font-size:10px;font-weight:800;background:linear-gradient(135deg,#8a40f5,#526aff)}
+.platform-bubble{
+  z-index:4;position:absolute;width:54px;height:54px;border-radius:50%;display:grid;place-items:center;
+  font-size:13px;font-weight:900;color:white;border:1px solid rgba(132,157,255,.25);
+  background:linear-gradient(145deg,#1c62a3,#15233a);box-shadow:0 12px 30px rgba(0,0,0,.25)
+}
+.bubble-tg{left:4%;top:21%}.bubble-phone{right:3%;bottom:13%}.bubble-link{right:0;top:23%}.bubble-olx{left:0;bottom:15%}.bubble-ig{right:7%;top:52%;background:linear-gradient(145deg,#a02ab5,#5034b4)}
+
+.platform-showcase{
+  display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-top:24px;
+  border:1px solid var(--premium-border);border-radius:20px;padding:20px;
+  background:linear-gradient(180deg,rgba(12,23,36,.94),rgba(8,15,25,.94))
+}
+.platform-card{
+  cursor:pointer;text-align:center;min-height:160px;padding:20px 13px;border-radius:15px;
+  border:1px solid #1b2c40;background:linear-gradient(180deg,#0d1926,#09131f);
+  transition:.2s ease
+}
+.platform-card:hover{transform:translateY(-3px);border-color:#385783;box-shadow:0 18px 35px rgba(0,0,0,.2)}
+.platform-card.planned{cursor:default}
+.platform-card.planned:after{
+  content:"СКОРО";display:inline-block;margin-top:10px;padding:4px 7px;border-radius:999px;
+  font-size:9px;font-weight:900;letter-spacing:.08em;color:#c1a6ff;background:#271844
+}
+.platform-logo{
+  width:57px;height:57px;border-radius:50%;display:grid;place-items:center;margin:0 auto 14px;
+  color:white;font-weight:900;font-size:15px
+}
+.tg-logo{background:#2598d8}.olx-logo{background:#21c8be}.ig-logo{background:linear-gradient(135deg,#f3b74b,#df3d75,#6439c8)}.phone-logo{background:#299e70}.link-logo{background:#4d5cce}
+.platform-card b{display:block}.platform-card small{display:block;color:#91a0b2;line-height:1.45;margin-top:8px}
+
+.how-strip{
+  display:grid;grid-template-columns:repeat(4,1fr);gap:1px;margin:24px 0;
+  border:1px solid var(--premium-border);border-radius:18px;overflow:hidden;background:#1b293b
+}
+.how-strip>div{padding:20px;background:#09131f}
+.how-strip span{width:31px;height:31px;border-radius:50%;display:grid;place-items:center;margin-bottom:12px;background:linear-gradient(135deg,#8545f5,#4e6cff);font-weight:900}
+.how-strip b{display:block;font-size:14px}.how-strip small{display:block;color:#8f9fb1;margin-top:6px;line-height:1.35}
+
+.premium-check-panel,.result-card,.empty-panel,.history-card,.profile-card{
+  border-radius:22px !important;
+  border-color:var(--premium-border) !important;
+  background:linear-gradient(180deg,rgba(13,24,38,.98),rgba(8,16,27,.98)) !important;
+  box-shadow:0 28px 70px rgba(0,0,0,.17)
+}
+.premium-check-panel{scroll-margin-top:96px}
+.check-tabs{
+  display:grid !important;grid-template-columns:repeat(3,1fr) !important;gap:10px !important
+}
+.check-tab{
+  border-radius:13px !important;
+  min-height:56px;
+}
+.check-tab.active{
+  background:linear-gradient(135deg,#258eff,#7343ff) !important;
+  border-color:transparent !important;
+  box-shadow:0 10px 28px rgba(70,86,255,.2)
+}
+#checkInput,.text-input,.select-input,textarea{
+  background:#091521 !important;border-color:#23354a !important;border-radius:13px !important
+}
+.primary{
+  border-radius:12px !important;background:linear-gradient(135deg,#298cff,#7641ff) !important;
+}
+.result-card{position:relative;overflow:hidden}
+.result-card:before{
+  content:"";position:absolute;width:320px;height:320px;border-radius:50%;right:-100px;top:80px;
+  background:radial-gradient(circle,rgba(86,63,255,.11),transparent 70%);pointer-events:none
+}
+.verdict-box,.technical-box,.advice-box{
+  border-radius:15px !important;background:#0a1723 !important
+}
+.score-ring{filter:drop-shadow(0 0 18px rgba(66,135,255,.14))}
+.alert-card{border-radius:17px !important;background:linear-gradient(180deg,#0c1724,#09131f) !important}
+
+@media(max-width:1100px){
+  .premium-hero{grid-template-columns:1fr .8fr}
+  .platform-showcase{grid-template-columns:repeat(3,1fr)}
+  .how-strip{grid-template-columns:repeat(2,1fr)}
+}
+@media(max-width:760px){
+  .premium-hero{grid-template-columns:1fr;padding:30px 20px}
+  .premium-hero h2{font-size:48px}
+  .premium-device-zone{min-height:430px}
+  .platform-showcase{grid-template-columns:repeat(2,1fr);padding:14px}
+  .platform-card:last-child{grid-column:span 2}
+  .how-strip{grid-template-columns:1fr 1fr}
+  .check-tabs{grid-template-columns:repeat(2,1fr) !important}
+}
+@media(max-width:480px){
+  .premium-hero h2{font-size:42px}
+  .premium-hero p{font-size:15px}
+  .device{width:205px;height:400px}
+  .platform-showcase{grid-template-columns:1fr}
+  .platform-card:last-child{grid-column:auto}
+  .how-strip{grid-template-columns:1fr}
+}

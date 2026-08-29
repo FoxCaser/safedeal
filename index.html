@@ -5,7 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#07111f">
   <title>SafeDeal — перевіряй перед дією</title>
-  <link rel="stylesheet" href="/style.css?v=6.5">
+  <meta name="description" content="SafeDeal перевіряє продавців, вакансії, посилання, Telegram, номери телефону та підозрілі повідомлення за доступними сигналами ризику.">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <link rel="stylesheet" href="/style.css?v=7.1">
 </head>
 <body>
   <div class="app-shell">
@@ -26,14 +28,13 @@
         <button class="nav-btn" data-check="contact">✈ <span>Telegram</span></button>
         <button class="nav-btn" data-check="phone">☎ <span>Номер телефону</span></button>
         <button class="nav-btn" data-check="text">▤ <span>Текст / скрін</span></button>
-        <button class="nav-btn" data-page="reputation">↻ <span>Репутація</span></button>
-        <button class="nav-btn" data-page="reports">⚑ <span>База скарг</span></button>
+                <button class="nav-btn" data-page="reports">⚑ <span>База скарг</span></button>
         <button class="nav-btn" data-page="history">◷ <span>Історія</span></button>
         <button class="nav-btn" data-page="profile">♙ <span>Профіль</span></button>
       </nav>
 
       <div class="side-card">
-        <span class="eyebrow">SAFEDEAL MVP</span>
+        <span class="eyebrow">SAFEDEAL SECURITY</span>
         <b>Безпечна перевірка</b>
         <p>Не вводь паролі, PIN, CVV або SMS-коди. SafeDeal ніколи їх не просить.</p>
       </div>
@@ -53,27 +54,70 @@
       </header>
 
       <section class="page active" id="home">
-        <div class="hero">
-          <div>
-            <span class="eyebrow">SAFE BEFORE ACTION</span>
-            <h2>Перевір підозріле<br><em>до того, як діяти</em></h2>
+        <section class="premium-hero">
+          <div class="premium-hero-copy">
+            <span class="launch-pill">SAFEDEAL • ONLINE SECURITY</span>
+            <h2>Перевір довіру.<br><em>Уникай обману.</em></h2>
             <p>
-              Продавець, вакансія, посилання, Telegram, номер телефону або підозрілий текст —
-              SafeDeal збере сигнали ризику й пояснить, що саме насторожує.
+              Перевіряй продавців, Telegram, номери телефонів, посилання та підозрілі пропозиції
+              до того, як переказувати гроші або передавати дані.
             </p>
+            <div class="hero-actions">
+              <button class="primary hero-primary" type="button" data-scroll-check>Почати перевірку</button>
+              <button class="ghost-button" type="button" data-page="reports">Переглянути скарги</button>
+            </div>
+            <div class="trust-strip">
+              <span>✓ Зрозумілий ризик 0–100</span>
+              <span>✓ Модеровані скарги</span>
+              <span>✓ Технічні сигнали</span>
+            </div>
           </div>
-          <div class="shield-wrap">
-            <div class="shield">✓</div>
-          </div>
-        </div>
 
-        <article class="check-panel" id="quickCheck">
+          <div class="premium-device-zone" aria-hidden="true">
+            <div class="orbit orbit-one"></div>
+            <div class="orbit orbit-two"></div>
+            <div class="platform-bubble bubble-tg">TG</div>
+            <div class="platform-bubble bubble-phone">☎</div>
+            <div class="platform-bubble bubble-link">↗</div>
+            <div class="platform-bubble bubble-olx">OLX</div>
+            <div class="platform-bubble bubble-ig">IG</div>
+
+            <div class="device">
+              <div class="device-screen">
+                <div class="device-notch"></div>
+                <div class="device-brand">🛡 SafeDeal</div>
+                <div class="device-shield">✓</div>
+                <strong>Перевірка довіри</strong>
+                <small>Швидко • Зрозуміло • Безпечніше</small>
+                <div class="device-search">Номер, Telegram або посилання</div>
+                <div class="device-action">Перевірити</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="platform-showcase">
+          <div class="platform-card" data-check="contact"><span class="platform-logo tg-logo">➤</span><b>Telegram</b><small>Профіль, публічні сигнали, скарги</small></div>
+          <div class="platform-card planned"><span class="platform-logo olx-logo">OLX</span><b>OLX</b><small>Модуль готується до фінального запуску</small></div>
+          <div class="platform-card planned"><span class="platform-logo ig-logo">◎</span><b>Instagram</b><small>Модуль готується до фінального запуску</small></div>
+          <div class="platform-card" data-check="phone"><span class="platform-logo phone-logo">☎</span><b>Номер</b><small>Точні збіги у базі скарг</small></div>
+          <div class="platform-card" data-check="link"><span class="platform-logo link-logo">↗</span><b>Посилання</b><small>Фішинг, домен і технічні сигнали</small></div>
+        </section>
+
+        <section class="how-strip">
+          <div><span>1</span><b>Введи дані</b><small>Номер, Telegram, URL або текст</small></div>
+          <div><span>2</span><b>SafeDeal аналізує</b><small>Сигнали ризику та скарги</small></div>
+          <div><span>3</span><b>Отримай результат</b><small>Оцінка 0–100 з поясненням</small></div>
+          <div><span>4</span><b>Приймай рішення</b><small>Перевір факти перед оплатою</small></div>
+        </section>
+
+        <article class="check-panel premium-check-panel" id="quickCheck">
           <div class="panel-head">
             <div>
               <span class="eyebrow">QUICK CHECK</span>
               <h3>Швидка перевірка</h3>
             </div>
-            <span class="chip">MVP</span>
+            <span class="chip">LIVE</span>
           </div>
 
           <div class="check-tabs">
@@ -168,33 +212,7 @@
       </section>
 
       
-      <section class="page" id="reputation">
-        <article class="empty-panel reputation-page">
-          <span class="eyebrow">REPUTATION HISTORY</span>
-          <h2>Історія репутації</h2>
-          <p>Тут ми будемо порівнювати рейтинг, кількість відгуків і публічні сліди змін у часі.</p>
-
-          <div class="rep-demo-grid">
-            <div class="rep-card">
-              <span>Було</span>
-              <strong>214</strong>
-              <small>відгуків</small>
-            </div>
-            <div class="rep-arrow">→</div>
-            <div class="rep-card warning">
-              <span>Зараз</span>
-              <strong>183</strong>
-              <small>відгуки</small>
-            </div>
-          </div>
-
-          <div class="rep-warning">
-            ⚠️ Приклад: зафіксовано зменшення кількості відгуків. SafeDeal показуватиме лише ті зміни, які реально вдалося зафіксувати або знайти в публічних архівах.
-          </div>
-        </article>
-      </section>
-
-<section class="page" id="reports">
+      <section class="page" id="reports">
         <article class="empty-panel reports-page">
           <span class="eyebrow">REPORT DATABASE</span>
           <h2>База скарг</h2>
@@ -235,6 +253,18 @@
             <textarea id="reportDetails" placeholder="Додаткові факти (необов’язково)"></textarea>
             <button class="primary full" id="submitReport">Надіслати на модерацію</button>
             <div id="reportSubmitStatus" class="report-submit-status"></div>
+          </div>
+
+          <div class="report-divider"></div>
+          <span class="eyebrow">APPEAL</span>
+          <h3>Оскаржити опубліковану скаргу</h3>
+          <p class="small-copy">Якщо запис стосується тебе або твоєї організації і містить помилку, надішли код скарги та пояснення. Оскарження також проходить ручну модерацію.</p>
+          <div class="report-form">
+            <input id="appealCode" class="text-input" placeholder="Код скарги, наприклад C-...">
+            <textarea id="appealMessage" placeholder="Поясни, що саме потрібно перевірити або виправити (мінімум 20 символів)"></textarea>
+            <input id="appealContact" class="text-input" placeholder="Контакт для відповіді (необов’язково)">
+            <button class="secondary-btn" id="submitAppeal">Надіслати оскарження</button>
+            <div id="appealStatus" class="report-submit-status"></div>
           </div>
         </article>
       </section>
@@ -325,6 +355,10 @@
           <div class="profile-footer-line">Профіль створено: <b id="profileSince">—</b></div>
         </article>
       </section>
+      <footer class="site-footer">
+        <span>SafeDeal дає автоматичну оцінку ризику, а не юридичний висновок.</span>
+        <div><a href="/privacy">Конфіденційність</a><a href="/terms">Умови використання</a></div>
+      </footer>
     </main>
 
     <nav class="mobile-nav">
@@ -337,6 +371,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js" defer></script>
-  <script src="/app.js?v=6.5" defer></script>
+  <script src="/app.js?v=7.0" defer></script>
 </body>
 </html>

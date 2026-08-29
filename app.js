@@ -12,7 +12,6 @@ const titles = {
   reports: "База скарг",
   history: "Історія перевірок",
   profile: "Профіль",
-  reputation: "Історія репутації"
 };
 
 function escapeHtml(value = "") {
@@ -454,10 +453,37 @@ if (saveProfileBtn) {
   });
 }
 
+let ocrLoaderPromise = null;
+async function ensureOcrEngine() {
+  if (globalThis.Tesseract?.recognize) return true;
+  if (ocrLoaderPromise) return ocrLoaderPromise;
+  const sources = [
+    "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js",
+    "https://unpkg.com/tesseract.js@5.1.1/dist/tesseract.min.js"
+  ];
+  ocrLoaderPromise = (async () => {
+    for (const src of sources) {
+      try {
+        await new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = src;
+          script.async = true;
+          script.onload = resolve;
+          script.onerror = reject;
+          document.head.appendChild(script);
+        });
+        if (globalThis.Tesseract?.recognize) return true;
+      } catch {}
+    }
+    return false;
+  })();
+  return ocrLoaderPromise;
+}
+
 async function recognizeScreenshot(file) {
   const status = $("#ocrStatus");
   if (!file) return "";
-  if (!globalThis.Tesseract?.recognize) throw new Error("ocr_engine_unavailable");
+  if (!(await ensureOcrEngine())) throw new Error("ocr_engine_unavailable");
   if (!String(file.type || "").startsWith("image/")) throw new Error("ocr_not_image");
   if (file.size > 8 * 1024 * 1024) throw new Error("ocr_file_too_large");
 
@@ -775,7 +801,12 @@ async function loadAlerts() {
   const res = await fetch("/api/community-alerts");
   const data = await res.json();
 
-  $("#alertsGrid").innerHTML = data.items.map((item) => `
+  const items = Array.isArray(data.items) ? data.items : [];
+  if (!items.length) {
+    $("#alertsGrid").innerHTML = `<div class="empty-state">Поки немає опублікованих попереджень.</div>`;
+    return;
+  }
+  $("#alertsGrid").innerHTML = items.map((item) => `
     <article class="alert-card">
       <div class="alert-head">
         <span class="risk-badge ${escapeHtml(item.level)}">${escapeHtml(item.label)}</span>
@@ -876,9 +907,11 @@ if (submitReport) {
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || "submit_failed");
 
-      status.textContent = data.persistent
-        ? `Скаргу прийнято. Код: ${data.report.code}. Статус: на модерації.`
-        : `Тестову скаргу прийнято. Код: ${data.report.code}. Постійне збереження запрацює після підключення бази даних.`;
+      status.textContent = data.duplicate
+        ? `Схожа скарга вже була надіслана нещодавно. Код: ${data.report.code}.`
+        : data.persistent
+          ? `Скаргу прийнято. Код: ${data.report.code}. Статус: на модерації.`
+          : `Скаргу прийнято тимчасово. Код: ${data.report.code}. Постійне збереження запрацює після підключення бази даних.`;
       status.className = "report-submit-status success";
       $("#reportReason").value = "";
       $("#reportDetails").value = "";
@@ -889,6 +922,50 @@ if (submitReport) {
     } finally {
       submitReport.disabled = false;
       submitReport.textContent = "Надіслати на модерацію";
+    }
+  });
+}
+
+const submitAppeal = $("#submitAppeal");
+if (submitAppeal) {
+  submitAppeal.addEventListener("click", async () => {
+    const reportCode = $("#appealCode").value.trim();
+    const message = $("#appealMessage").value.trim();
+    const contact = $("#appealContact").value.trim();
+    const status = $("#appealStatus");
+    if (!reportCode || message.length < 20) {
+      status.textContent = "Вкажи код скарги та пояснення щонайменше 20 символів.";
+      status.className = "report-submit-status error";
+      return;
+    }
+    submitAppeal.disabled = true;
+    status.textContent = "Надсилаємо…";
+    status.className = "report-submit-status";
+    try {
+      const res = await apiFetch("/api/appeals", {
+        method: "POST",
+        body: JSON.stringify({ reportCode, message, contact })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || "appeal_failed");
+      status.textContent = data.duplicate
+        ? "Оскарження на цей запис уже очікує модерації."
+        : "Оскарження прийнято на ручну перевірку ✅";
+      status.className = "report-submit-status success";
+      if (!data.duplicate) {
+        $("#appealMessage").value = "";
+        $("#appealContact").value = "";
+      }
+    } catch (e) {
+      const messages = {
+        report_not_found: "Схвалену скаргу з таким кодом не знайдено.",
+        invalid_appeal: "Перевір код скарги та пояснення.",
+        rate_limited: "Забагато спроб. Спробуй пізніше."
+      };
+      status.textContent = messages[e.message] || "Не вдалося надіслати оскарження.";
+      status.className = "report-submit-status error";
+    } finally {
+      submitAppeal.disabled = false;
     }
   });
 }

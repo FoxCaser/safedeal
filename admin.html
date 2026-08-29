@@ -1,123 +1,17 @@
 <!doctype html>
-<html lang="uk">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <meta name="robots" content="noindex,nofollow" />
-  <title>SafeDeal — Модерація</title>
-  <style>
-    :root{color-scheme:dark;--bg:#061120;--card:#0b1a2c;--line:#173552;--text:#eef6ff;--muted:#8da2b8;--blue:#2e8cff;--purple:#6d45ff;--green:#36d98b;--red:#ff6677;--amber:#ffc35c}
-    *{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:radial-gradient(circle at top,#0c2540 0,#061120 40%);color:var(--text);min-height:100vh}
-    .wrap{width:min(1100px,94vw);margin:auto;padding:28px 0 70px}.top{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:22px}.brand small{display:block;color:#65adff;letter-spacing:.18em;font-weight:800}.brand h1{margin:7px 0 0;font-size:clamp(28px,6vw,44px)}
-    .panel,.card{background:rgba(10,27,46,.94);border:1px solid var(--line);border-radius:22px;box-shadow:0 20px 60px rgba(0,0,0,.2)}.panel{padding:18px;margin-bottom:18px}.login{display:grid;grid-template-columns:1fr auto;gap:10px}.login input,.toolbar select,.note{width:100%;background:#071728;border:1px solid #1b3c5c;color:var(--text);border-radius:14px;padding:14px;font:inherit}.btn{border:0;border-radius:14px;padding:13px 18px;font-weight:800;font:inherit;color:#fff;cursor:pointer;background:linear-gradient(90deg,var(--blue),var(--purple))}.btn:disabled{opacity:.55;cursor:not-allowed}.btn.secondary{background:#10253b;border:1px solid #244764}.btn.approve{background:#13794d}.btn.reject{background:#9d3144}.btn.logout{background:#10253b;border:1px solid #244764}
-    .toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}.toolbar .left{display:flex;gap:10px;align-items:center}.toolbar select{width:auto;min-width:170px}.status{color:var(--muted);font-size:14px;margin-top:10px}.status.error{color:#ff9aa6}.status.ok{color:#75e5ad}
-    .list{display:grid;gap:14px}.card{padding:18px}.card-top{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}.badge{display:inline-flex;border:1px solid #2c4c68;border-radius:999px;padding:6px 10px;color:#b8cee2;font-size:12px}.badge.pending{border-color:#765d26;color:#ffd77a}.badge.approved{border-color:#1f7050;color:#75e5ad}.badge.rejected{border-color:#7f3441;color:#ff9aa6}.target{font-size:21px;font-weight:850;margin:14px 0 6px;word-break:break-word}.reason{font-size:16px;line-height:1.5;margin:0 0 10px}.details{color:#b9c9d8;white-space:pre-wrap;line-height:1.45;background:#071728;border:1px solid #153550;padding:12px;border-radius:14px;margin:10px 0}.meta{display:flex;gap:12px;flex-wrap:wrap;color:var(--muted);font-size:13px}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:15px}.empty{padding:34px;text-align:center;color:var(--muted);border:1px dashed #29445f;border-radius:20px}.hidden{display:none!important}@media(max-width:620px){.wrap{width:min(94vw,700px);padding-top:18px}.top{align-items:flex-start}.login{grid-template-columns:1fr}.toolbar{align-items:stretch}.toolbar .left{width:100%;display:grid;grid-template-columns:1fr 1fr}.toolbar select{width:100%}.actions .btn{flex:1}.card{padding:16px}.details{font-size:14px}}
-  </style>
-</head>
-<body>
-  <main class="wrap">
-    <div class="top">
-      <div class="brand"><small>SAFEDEAL ADMIN</small><h1>Модерація скарг</h1></div>
-      <button id="logout" class="btn logout hidden">Вийти</button>
-    </div>
-
-    <section id="loginPanel" class="panel">
-      <div class="login">
-        <input id="adminKey" type="password" autocomplete="current-password" placeholder="Введи ADMIN_KEY" />
-        <button id="loginBtn" class="btn">Увійти</button>
-      </div>
-      <div id="loginStatus" class="status">Ключ зберігається лише в цій вкладці браузера.</div>
-    </section>
-
-    <section id="moderationPanel" class="hidden">
-      <div class="panel toolbar">
-        <div class="left">
-          <select id="statusFilter">
-            <option value="pending">На модерації</option>
-            <option value="approved">Схвалені</option>
-            <option value="rejected">Відхилені</option>
-            <option value="all">Усі</option>
-          </select>
-          <button id="refresh" class="btn secondary">Оновити</button>
-        </div>
-        <div id="summary" class="status"></div>
-      </div>
-      <div id="list" class="list"></div>
-    </section>
-  </main>
-
-  <script>
-    const $ = (s) => document.querySelector(s);
-    const escapeHtml = (v='') => String(v).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
-    const typeLabel = (t) => ({seller:'Продавець',job:'Вакансія',link:'Посилання',contact:'Контакт',text:'Текст'})[t] || t || '—';
-    const statusLabel = (s) => ({pending:'На модерації',approved:'Схвалено',rejected:'Відхилено'})[s] || s || '—';
-    const fmt = (v) => { const d = new Date(v); return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString('uk-UA'); };
-
-    function key(){ return sessionStorage.getItem('safedeal_admin_key') || ''; }
-    async function api(url, options={}){
-      const headers = new Headers(options.headers || {});
-      headers.set('x-admin-key', key());
-      if (options.body && !headers.has('Content-Type')) headers.set('Content-Type','application/json');
-      const res = await fetch(url,{...options,headers,cache:'no-store'});
-      let data={}; try{ data=await res.json(); }catch{}
-      if(res.status===401){ logout('Неправильний ADMIN_KEY.'); throw new Error('unauthorized'); }
-      if(res.status===503 && data.error==='admin_not_configured') throw new Error('ADMIN_KEY ще не доданий у Render.');
-      if(!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      return data;
-    }
-
-    function showAdmin(){ $('#loginPanel').classList.add('hidden'); $('#moderationPanel').classList.remove('hidden'); $('#logout').classList.remove('hidden'); }
-    function logout(message=''){ sessionStorage.removeItem('safedeal_admin_key'); $('#moderationPanel').classList.add('hidden'); $('#logout').classList.add('hidden'); $('#loginPanel').classList.remove('hidden'); $('#adminKey').value=''; $('#loginStatus').textContent=message || 'Вийшли з адмінки.'; $('#loginStatus').className='status'+(message?' error':''); }
-
-    async function loadReports(){
-      const filter=$('#statusFilter').value;
-      $('#list').innerHTML='<div class="empty">Завантаження…</div>';
-      $('#summary').textContent='';
-      const data=await api(`/api/admin/reports?status=${encodeURIComponent(filter)}`);
-      $('#summary').textContent=`Записів: ${data.items.length}`;
-      if(!data.items.length){ $('#list').innerHTML='<div class="empty">Скарг у цьому статусі немає.</div>'; return; }
-      $('#list').innerHTML=data.items.map(r=>`
-        <article class="card" data-code="${escapeHtml(r.code)}">
-          <div class="card-top"><div><span class="badge">${escapeHtml(typeLabel(r.type))}</span> <span class="badge ${escapeHtml(r.status)}">${escapeHtml(statusLabel(r.status))}</span></div><span class="badge">${escapeHtml(r.code)}</span></div>
-          <div class="target">${escapeHtml(r.target)}</div>
-          <p class="reason">${escapeHtml(r.reason)}</p>
-          ${r.details ? `<div class="details">${escapeHtml(r.details)}</div>` : ''}
-          ${r.moderator_note ? `<div class="details"><b>Нотатка модератора:</b> ${escapeHtml(r.moderator_note)}</div>` : ''}
-          <div class="meta"><span>Створено: ${escapeHtml(fmt(r.created_at))}</span>${r.moderated_at?`<span>Модеровано: ${escapeHtml(fmt(r.moderated_at))}</span>`:''}</div>
-          <div class="actions">
-            ${r.status!=='approved'?`<button class="btn approve" data-action="approved">Схвалити</button>`:''}
-            ${r.status!=='rejected'?`<button class="btn reject" data-action="rejected">Відхилити</button>`:''}
-            ${r.status!=='pending'?`<button class="btn secondary" data-action="pending">Повернути на модерацію</button>`:''}
-          </div>
-        </article>`).join('');
-    }
-
-    async function setStatus(card, status){
-      const code=card.dataset.code;
-      let note='';
-      if(status==='rejected') note=prompt('Причина відхилення (необов’язково):','') || '';
-      const buttons=[...card.querySelectorAll('button')]; buttons.forEach(b=>b.disabled=true);
-      try{
-        await api(`/api/admin/reports/${encodeURIComponent(code)}`,{method:'PATCH',body:JSON.stringify({status,note})});
-        await loadReports();
-      }catch(e){ alert(`Не вдалося змінити статус: ${e.message}`); buttons.forEach(b=>b.disabled=false); }
-    }
-
-    $('#loginBtn').addEventListener('click', async()=>{
-      const value=$('#adminKey').value.trim(); if(!value){ $('#adminKey').focus(); return; }
-      sessionStorage.setItem('safedeal_admin_key',value);
-      $('#loginBtn').disabled=true; $('#loginStatus').textContent='Перевіряємо…';
-      try{ await api('/api/admin/reports?status=pending'); showAdmin(); await loadReports(); }
-      catch(e){ if(e.message!=='unauthorized'){ $('#loginStatus').textContent=e.message; $('#loginStatus').className='status error'; sessionStorage.removeItem('safedeal_admin_key'); } }
-      finally{ $('#loginBtn').disabled=false; }
-    });
-    $('#adminKey').addEventListener('keydown',e=>{ if(e.key==='Enter') $('#loginBtn').click(); });
-    $('#refresh').addEventListener('click',()=>loadReports().catch(e=>alert(e.message)));
-    $('#statusFilter').addEventListener('change',()=>loadReports().catch(e=>alert(e.message)));
-    $('#logout').addEventListener('click',()=>logout());
-    $('#list').addEventListener('click',e=>{ const btn=e.target.closest('button[data-action]'); if(!btn)return; const card=btn.closest('.card'); setStatus(card,btn.dataset.action); });
-
-    if(key()){ showAdmin(); loadReports().catch(()=>logout('Сесія адмінки завершилась. Увійди ще раз.')); }
-  </script>
-</body>
-</html>
+<html lang="uk"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="robots" content="noindex,nofollow"><title>SafeDeal — Модерація</title>
+<style>
+:root{color-scheme:dark;--bg:#061120;--card:#0b1a2c;--line:#173552;--text:#eef6ff;--muted:#8da2b8;--blue:#2e8cff;--purple:#6d45ff;--green:#36d98b;--red:#ff6677;--amber:#ffc35c}*{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:radial-gradient(circle at top,#0c2540 0,#061120 40%);color:var(--text);min-height:100vh}.wrap{width:min(1100px,94vw);margin:auto;padding:28px 0 70px}.top{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:22px}.brand small{display:block;color:#65adff;letter-spacing:.18em;font-weight:800}.brand h1{margin:7px 0 0;font-size:clamp(28px,6vw,44px)}.panel,.card{background:rgba(10,27,46,.94);border:1px solid var(--line);border-radius:22px;box-shadow:0 20px 60px rgba(0,0,0,.2)}.panel{padding:18px;margin-bottom:18px}.login{display:grid;grid-template-columns:1fr auto;gap:10px}.login input,.toolbar select{width:100%;background:#071728;border:1px solid #1b3c5c;color:var(--text);border-radius:14px;padding:14px;font:inherit}.btn{border:0;border-radius:14px;padding:13px 18px;font-weight:800;font:inherit;color:#fff;cursor:pointer;background:linear-gradient(90deg,var(--blue),var(--purple))}.btn:disabled{opacity:.55}.btn.secondary{background:#10253b;border:1px solid #244764}.btn.approve{background:#13794d}.btn.reject{background:#9d3144}.toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}.toolbar .left,.tabs{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.toolbar select{width:auto;min-width:170px}.status{color:var(--muted);font-size:14px;margin-top:10px}.status.error{color:#ff9aa6}.list{display:grid;gap:14px}.card{padding:18px}.card-top{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}.badge{display:inline-flex;border:1px solid #2c4c68;border-radius:999px;padding:6px 10px;color:#b8cee2;font-size:12px}.badge.pending{border-color:#765d26;color:#ffd77a}.badge.approved,.badge.resolved{border-color:#1f7050;color:#75e5ad}.badge.rejected{border-color:#7f3441;color:#ff9aa6}.target{font-size:21px;font-weight:850;margin:14px 0 6px;word-break:break-word}.reason{font-size:16px;line-height:1.5;margin:0 0 10px}.details{color:#b9c9d8;white-space:pre-wrap;line-height:1.45;background:#071728;border:1px solid #153550;padding:12px;border-radius:14px;margin:10px 0}.meta{display:flex;gap:12px;flex-wrap:wrap;color:var(--muted);font-size:13px}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:15px}.empty{padding:34px;text-align:center;color:var(--muted);border:1px dashed #29445f;border-radius:20px}.hidden{display:none!important}.tab.active{outline:2px solid #4f91ff}.contact{color:#80baff;word-break:break-word}@media(max-width:620px){.login{grid-template-columns:1fr}.toolbar{align-items:stretch}.toolbar .left{width:100%;display:grid;grid-template-columns:1fr 1fr}.toolbar select{width:100%}.actions .btn{flex:1}}
+</style></head><body><main class="wrap"><div class="top"><div class="brand"><small>SAFEDEAL ADMIN</small><h1>Модерація</h1></div><button id="logout" class="btn secondary hidden">Вийти</button></div>
+<section id="loginPanel" class="panel"><div class="login"><input id="adminKey" type="password" autocomplete="current-password" placeholder="Введи ADMIN_KEY"><button id="loginBtn" class="btn">Увійти</button></div><div id="loginStatus" class="status">Ключ зберігається лише в цій вкладці браузера.</div></section>
+<section id="moderationPanel" class="hidden"><div class="panel"><div class="tabs"><button class="btn tab active" data-view="reports">Скарги</button><button class="btn secondary tab" data-view="appeals">Оскарження</button></div></div><div class="panel toolbar"><div class="left"><select id="statusFilter"></select><button id="refresh" class="btn secondary">Оновити</button></div><div id="summary" class="status"></div></div><div id="list" class="list"></div></section></main>
+<script>
+const $=s=>document.querySelector(s);const esc=(v='')=>String(v).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));const fmt=v=>{const d=new Date(v);return Number.isNaN(d.getTime())?'—':d.toLocaleString('uk-UA')};let view='reports';
+function key(){return sessionStorage.getItem('safedeal_admin_key')||''}async function api(url,options={}){const h=new Headers(options.headers||{});h.set('x-admin-key',key());if(options.body&&!h.has('Content-Type'))h.set('Content-Type','application/json');const r=await fetch(url,{...options,headers:h,cache:'no-store'});let d={};try{d=await r.json()}catch{}if(r.status===401){logout('Неправильний ADMIN_KEY.');throw new Error('unauthorized')}if(!r.ok||!d.ok)throw new Error(d.error||`HTTP ${r.status}`);return d}
+function showAdmin(){$('#loginPanel').classList.add('hidden');$('#moderationPanel').classList.remove('hidden');$('#logout').classList.remove('hidden')}function logout(m=''){sessionStorage.removeItem('safedeal_admin_key');$('#moderationPanel').classList.add('hidden');$('#logout').classList.add('hidden');$('#loginPanel').classList.remove('hidden');$('#adminKey').value='';$('#loginStatus').textContent=m||'Вийшли з адмінки.'}
+function setFilter(){const f=$('#statusFilter');f.innerHTML=view==='reports'?'<option value="pending">На модерації</option><option value="approved">Схвалені</option><option value="rejected">Відхилені</option><option value="all">Усі</option>':'<option value="pending">Нові</option><option value="resolved">Вирішені</option><option value="rejected">Відхилені</option><option value="all">Усі</option>'}
+const typeLabel=t=>({seller:'Продавець',job:'Вакансія',link:'Посилання',contact:'Telegram',phone:'Телефон',text:'Текст'})[t]||t||'—';const statusLabel=s=>({pending:'На модерації',approved:'Схвалено',rejected:'Відхилено',resolved:'Вирішено'})[s]||s||'—';
+async function load(){const f=$('#statusFilter').value;$('#list').innerHTML='<div class="empty">Завантаження…</div>';const d=await api(view==='reports'?`/api/admin/reports?status=${encodeURIComponent(f)}`:`/api/admin/appeals?status=${encodeURIComponent(f)}`);$('#summary').textContent=`Записів: ${d.items.length}`;if(!d.items.length){$('#list').innerHTML='<div class="empty">Записів немає.</div>';return}$('#list').innerHTML=view==='reports'?d.items.map(r=>`<article class="card" data-code="${esc(r.code)}"><div class="card-top"><div><span class="badge">${esc(typeLabel(r.type))}</span> <span class="badge ${esc(r.status)}">${esc(statusLabel(r.status))}</span></div><span class="badge">${esc(r.code)}</span></div><div class="target">${esc(r.target)}</div><p class="reason">${esc(r.reason)}</p>${r.details?`<div class="details">${esc(r.details)}</div>`:''}${r.moderator_note?`<div class="details"><b>Нотатка:</b> ${esc(r.moderator_note)}</div>`:''}<div class="meta"><span>Створено: ${esc(fmt(r.created_at))}</span></div><div class="actions">${r.status!=='approved'?'<button class="btn approve" data-action="approved">Схвалити</button>':''}${r.status!=='rejected'?'<button class="btn reject" data-action="rejected">Відхилити</button>':''}${r.status!=='pending'?'<button class="btn secondary" data-action="pending">На модерацію</button>':''}</div></article>`).join(''):d.items.map(a=>`<article class="card" data-id="${esc(a.id)}"><div class="card-top"><div><span class="badge ${esc(a.status)}">${esc(statusLabel(a.status))}</span></div><span class="badge">${esc(a.report_code)}</span></div><div class="target">${esc(a.target||'Запис')}</div><div class="details">${esc(a.message)}</div>${a.contact?`<div class="contact">Контакт: ${esc(a.contact)}</div>`:''}${a.moderator_note?`<div class="details"><b>Нотатка:</b> ${esc(a.moderator_note)}</div>`:''}<div class="meta"><span>Створено: ${esc(fmt(a.created_at))}</span></div><div class="actions">${a.status!=='resolved'?'<button class="btn approve" data-action="resolved">Вирішено</button>':''}${a.status!=='rejected'?'<button class="btn reject" data-action="rejected">Відхилити</button>':''}${a.status!=='pending'?'<button class="btn secondary" data-action="pending">Повернути</button>':''}</div></article>`).join('')}
+async function change(card,status){const note=prompt('Нотатка модератора (необов’язково):','')||'';card.querySelectorAll('button').forEach(b=>b.disabled=true);try{if(view==='reports')await api(`/api/admin/reports/${encodeURIComponent(card.dataset.code)}`,{method:'PATCH',body:JSON.stringify({status,note})});else await api(`/api/admin/appeals/${encodeURIComponent(card.dataset.id)}`,{method:'PATCH',body:JSON.stringify({status,note})});await load()}catch(e){alert(`Помилка: ${e.message}`)}}
+$('#loginBtn').onclick=async()=>{const v=$('#adminKey').value.trim();if(!v)return;sessionStorage.setItem('safedeal_admin_key',v);try{await api('/api/admin/reports?status=pending');showAdmin();setFilter();await load()}catch(e){if(e.message!=='unauthorized')$('#loginStatus').textContent=e.message}};$('#adminKey').addEventListener('keydown',e=>{if(e.key==='Enter')$('#loginBtn').click()});$('#logout').onclick=()=>logout();$('#refresh').onclick=()=>load().catch(e=>alert(e.message));$('#statusFilter').onchange=()=>load().catch(e=>alert(e.message));document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{view=b.dataset.view;document.querySelectorAll('[data-view]').forEach(x=>{x.classList.toggle('active',x===b);x.classList.toggle('secondary',x!==b)});setFilter();load().catch(e=>alert(e.message))});$('#list').onclick=e=>{const b=e.target.closest('button[data-action]');if(b)change(b.closest('.card'),b.dataset.action)};if(key()){showAdmin();setFilter();load().catch(()=>logout('Сесія адмінки завершилась.'))}
+</script></body></html>

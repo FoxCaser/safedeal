@@ -11,7 +11,6 @@ const crypto = require("crypto");
 const { domainToUnicode } = require("url");
 const helmet = require("helmet");
 const compression = require("compression");
-const cors = require("cors");
 const morgan = require("morgan");
 const { Pool } = require("pg");
 
@@ -26,13 +25,21 @@ const ADMIN_KEY = process.env.ADMIN_KEY || "";
 const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
 const RESEND_FROM = process.env.RESEND_FROM || "SafeDeal <onboarding@resend.dev>";
 const APP_BASE_URL = String(process.env.APP_BASE_URL || "https://safedeal-sqlg.onrender.com").replace(/\/+$/, "");
+const SHOW_DEMO_DATA = String(process.env.SHOW_DEMO_DATA || "false").toLowerCase() === "true";
+const APP_VERSION = "7.0.0-rc1";
 
 app.set("trust proxy", 1);
-app.use(helmet({ contentSecurityPolicy: false }));
+app.disable("x-powered-by");
+app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: { policy: "same-site" } }));
+app.use((req, res, next) => {
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  if (req.path.startsWith("/api/") || req.path === "/admin") res.setHeader("Cache-Control", "no-store");
+  next();
+});
 app.use(compression());
-app.use(cors());
-app.use(express.json({ limit: "1mb" }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: "768kb", type: ["application/json", "application/*+json"] }));
+app.use(express.urlencoded({ extended: false, limit: "256kb" }));
 app.use(morgan("tiny"));
 
 const ALLOWED_TYPES = new Set(["seller", "job", "link", "contact", "phone", "text"]);
@@ -175,6 +182,21 @@ async function initDatabase() {
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_password_reset_user ON password_reset_requests(user_id, created_at DESC)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_password_reset_expires ON password_reset_requests(expires_at)`);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS report_appeals (
+        id UUID PRIMARY KEY,
+        report_code TEXT NOT NULL,
+        message TEXT NOT NULL,
+        contact TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'pending',
+        moderator_note TEXT NOT NULL DEFAULT '',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_report_appeals_status_created ON report_appeals(status, created_at DESC)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_report_appeals_report_code ON report_appeals(report_code)`);
 
     await pool.query(`ALTER TABLE community_reports ADD COLUMN IF NOT EXISTS submitter_user_id UUID`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_reports_submitter_user ON community_reports(submitter_user_id)`);
@@ -762,7 +784,7 @@ function scoreToLevel(score) {
 }
 
 
-function buildHumanVerdict({ score, type, telegram, phone, phoneModeratedMatches = 0, sellerModeratedMatches = 0, sellerExactPhoneMatches = 0 }) {
+function buildHumanVerdict({ score, type, telegram, phone, phoneModeratedMatches = 0, sellerModeratedMatches = 0, sellerExactPhoneMatches = 0, moderatedMatchesCount = 0 }) {
   const telegramLimited =
     type === "contact" &&
     telegram &&
@@ -808,6 +830,15 @@ function buildHumanVerdict({ score, type, telegram, phone, phoneModeratedMatches
       title: "Є попередження щодо цього продавця",
       text: `У модерованій базі SafeDeal знайдено підтверджених скарг: ${sellerModeratedMatches}.${exactText} Перевірте деталі перед оплатою або передачею даних.`,
       evidence: `Підтверджених збігів: ${sellerModeratedMatches}`
+    };
+  }
+
+  if (moderatedMatchesCount > 0) {
+    return {
+      kind: score >= 51 ? "danger" : "warning",
+      title: "Є підтверджені попередження у базі SafeDeal",
+      text: `Знайдено модерованих збігів: ${moderatedMatchesCount}. Це не є доказом шахрайства, але перед оплатою або передачею даних потрібна додаткова перевірка.`,
+      evidence: `Модерованих збігів: ${moderatedMatchesCount}`
     };
   }
 
@@ -2663,7 +2694,7 @@ async function findCommunityMatches(input) {
     candidates.add(match[0].toLowerCase());
   }
 
-  const approved = [...demoApprovedReports, ...(await getApprovedDbReports())];
+  const approved = [...(SHOW_DEMO_DATA ? demoApprovedReports : []), ...(await getApprovedDbReports())];
   const matches = approved.filter((report) => {
     const key = normalizeTargetKey(report.targetKey || report.target);
     if (!key) return false;
@@ -2736,19 +2767,11 @@ async function analyzeInput(type, input) {
     : [];
 
   if (moderatedMatches.length) {
-    let points;
-
-    // A confirmed complaint tied to the exact phone number must carry the same
-    // weight in both “Phone” and “Seller” modes. This prevents a seller check
-    // from showing a green verdict for a number already present in moderation.
-    if ((safeType === "phone" || safeType === "seller") && exactPhoneModeratedMatches.length > 0) {
-      points = exactPhoneModeratedMatches.length >= 3
-        ? 90
-        : exactPhoneModeratedMatches.length * 35;
-    } else {
-      points = Math.min(28, 12 + (moderatedMatches.length - 1) * 5);
-    }
-
+    // Every public complaint is moderated before it can influence risk. Exact
+    // moderated matches use one scale across check modes: 1 → 35, 2 → 70, 3+ → 90.
+    // This is a risk signal, not a legal finding that the target is fraudulent.
+    const exactCount = exactPhoneModeratedMatches.length || moderatedMatches.length;
+    const points = exactCount >= 3 ? 90 : exactCount * 35;
     score += points;
 
     if (safeType === "phone") {
@@ -2773,7 +2796,8 @@ async function analyzeInput(type, input) {
     phone,
     phoneModeratedMatches: safeType === "phone" ? exactPhoneModeratedMatches.length : 0,
     sellerModeratedMatches: safeType === "seller" ? moderatedMatches.length : 0,
-    sellerExactPhoneMatches: safeType === "seller" ? exactPhoneModeratedMatches.length : 0
+    sellerExactPhoneMatches: safeType === "seller" ? exactPhoneModeratedMatches.length : 0,
+    moderatedMatchesCount: moderatedMatches.length
   });
 
   if (!reasons.length) {
@@ -2847,6 +2871,14 @@ function validateReportBody(body = {}) {
 }
 
 const rateBuckets = new Map();
+let lastRateCleanup = 0;
+function cleanupRateBuckets(now = Date.now()) {
+  if (now - lastRateCleanup < 5 * 60 * 1000) return;
+  lastRateCleanup = now;
+  for (const [key, value] of rateBuckets) {
+    if (!value || value.resetAt <= now) rateBuckets.delete(key);
+  }
+}
 function safeSecretEquals(a, b) {
   const left = Buffer.from(String(a || ""));
   const right = Buffer.from(String(b || ""));
@@ -2867,20 +2899,29 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-function rateLimit({ windowMs = 60 * 60 * 1000, max = 80 } = {}) {
+function rateLimit({ windowMs = 60 * 60 * 1000, max = 80, scope = "route" } = {}) {
   return (req, res, next) => {
-    const key = req.ip || req.socket.remoteAddress || "unknown";
     const now = Date.now();
+    cleanupRateBuckets(now);
+    const ip = req.ip || req.socket.remoteAddress || "unknown";
+    const routePart = scope === "global" ? "global" : `${req.method}:${req.path}`;
+    const key = `${routePart}:${ip}`;
     const current = rateBuckets.get(key);
 
     if (!current || current.resetAt <= now) {
       rateBuckets.set(key, { count: 1, resetAt: now + windowMs });
+      res.setHeader("X-RateLimit-Limit", String(max));
+      res.setHeader("X-RateLimit-Remaining", String(Math.max(0, max - 1)));
       return next();
     }
 
     current.count += 1;
+    res.setHeader("X-RateLimit-Limit", String(max));
+    res.setHeader("X-RateLimit-Remaining", String(Math.max(0, max - current.count)));
     if (current.count > max) {
-      return res.status(429).json({ ok: false, error: "rate_limited" });
+      const retryAfter = Math.max(1, Math.ceil((current.resetAt - now) / 1000));
+      res.setHeader("Retry-After", String(retryAfter));
+      return res.status(429).json({ ok: false, error: "rate_limited", retryAfter });
     }
 
     next();
@@ -2891,6 +2932,8 @@ app.get("/api/health", (req, res) => {
   res.json({
     ok: true,
     service: "safedeal",
+    version: APP_VERSION,
+    uptimeSeconds: Math.floor(process.uptime()),
     webRiskConfigured: Boolean(GOOGLE_WEB_RISK_API_KEY),
     phishTankEnabled: true,
     phishTankKeyConfigured: Boolean(PHISHTANK_APP_KEY),
@@ -2906,8 +2949,39 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-app.get("/api/community-alerts", (req, res) => {
-  res.json({ ok: true, items: demoAlerts, demo: true });
+app.get("/api/community-alerts", async (req, res) => {
+  if (!databaseReady || !pool) {
+    return res.json({ ok: true, items: SHOW_DEMO_DATA ? demoAlerts : [], demo: SHOW_DEMO_DATA });
+  }
+  try {
+    const { rows } = await pool.query(`
+      SELECT target_key, MAX(target) AS target, MAX(type) AS type,
+             COUNT(*)::int AS complaint_count, MAX(updated_at) AS updated_at,
+             (ARRAY_AGG(reason ORDER BY updated_at DESC))[1] AS latest_reason
+      FROM community_reports
+      WHERE status = 'approved'
+      GROUP BY target_key
+      ORDER BY MAX(updated_at) DESC
+      LIMIT 8
+    `);
+    const items = rows.map((row) => {
+      const count = Number(row.complaint_count) || 1;
+      const score = count >= 3 ? 90 : count * 35;
+      const { level, label } = scoreToLevel(score);
+      return {
+        id: `COMM-${String(row.target_key).slice(0, 40)}`,
+        target: row.target,
+        type: row.type,
+        score, level, label,
+        reasons: [row.latest_reason || `Модерованих скарг: ${count}`],
+        updatedAt: new Date(row.updated_at).toLocaleDateString("uk-UA")
+      };
+    });
+    res.json({ ok: true, items: [...items, ...(SHOW_DEMO_DATA ? demoAlerts : [])].slice(0, 8), demo: SHOW_DEMO_DATA });
+  } catch (error) {
+    console.error("Community alerts error:", error.message);
+    res.json({ ok: true, items: SHOW_DEMO_DATA ? demoAlerts : [], demo: SHOW_DEMO_DATA });
+  }
 });
 
 app.get("/api/auth/me", rateLimit({ max: 240 }), async (req, res) => {
@@ -3169,7 +3243,7 @@ app.get("/api/reports", async (req, res) => {
 
   try {
     const dbItems = await getApprovedDbReports();
-    const all = [...dbItems, ...demoApprovedReports];
+    const all = [...dbItems, ...(SHOW_DEMO_DATA ? demoApprovedReports : [])];
     const items = all
       .filter((item) => type === "all" || item.type === type)
       .filter((item) => {
@@ -3214,6 +3288,19 @@ app.post("/api/reports", rateLimit({ max: 20 }), async (req, res) => {
   try {
     if (databaseReady && pool) {
       if (clientId) await ensureClientProfile(clientId);
+      if (clientId || authUser?.id) {
+        const duplicate = await pool.query(
+          `SELECT code, status FROM community_reports
+           WHERE target_key = $1
+             AND created_at > NOW() - INTERVAL '10 minutes'
+             AND (($2::text IS NOT NULL AND submitter_client_id = $2) OR ($3::uuid IS NOT NULL AND submitter_user_id = $3))
+           ORDER BY created_at DESC LIMIT 1`,
+          [valid.targetKey, clientId || null, authUser?.id || null]
+        );
+        if (duplicate.rows.length) {
+          return res.status(200).json({ ok: true, duplicate: true, report: duplicate.rows[0], persistent: true });
+        }
+      }
       await pool.query(
         `INSERT INTO community_reports
           (code, target, target_key, type, reason, details, status, submitter_client_id, submitter_user_id)
@@ -3254,6 +3341,61 @@ app.get("/api/reports/status/:code", async (req, res) => {
     res.json({ ok: true, report: { code: found.code, status: found.status, createdAt: found.createdAt } });
   } catch (error) {
     res.status(500).json({ ok: false, error: "status_failed" });
+  }
+});
+
+app.post("/api/appeals", rateLimit({ windowMs: 60 * 60 * 1000, max: 6 }), async (req, res) => {
+  if (!databaseReady || !pool) return res.status(503).json({ ok: false, error: "database_unavailable" });
+  const reportCode = compactSpaces(req.body?.reportCode || "").toUpperCase().slice(0, 80);
+  const message = compactSpaces(req.body?.message || "").slice(0, 2000);
+  const contact = compactSpaces(req.body?.contact || "").slice(0, 254);
+  if (!reportCode || message.length < 20) return res.status(400).json({ ok: false, error: "invalid_appeal" });
+  try {
+    const report = await pool.query(`SELECT code FROM community_reports WHERE code = $1 AND status = 'approved' LIMIT 1`, [reportCode]);
+    if (!report.rows.length) return res.status(404).json({ ok: false, error: "report_not_found" });
+    const existing = await pool.query(`SELECT id FROM report_appeals WHERE report_code = $1 AND status = 'pending' AND created_at > NOW() - INTERVAL '24 hours' LIMIT 1`, [reportCode]);
+    if (existing.rows.length) return res.json({ ok: true, accepted: true, duplicate: true });
+    await pool.query(`INSERT INTO report_appeals (id, report_code, message, contact) VALUES ($1,$2,$3,$4)`, [crypto.randomUUID(), reportCode, message, contact]);
+    res.status(201).json({ ok: true, accepted: true });
+  } catch (error) {
+    console.error("Appeal submit error:", error.message);
+    res.status(500).json({ ok: false, error: "appeal_submit_failed" });
+  }
+});
+
+app.get("/api/admin/appeals", requireAdmin, rateLimit({ max: 240 }), async (req, res) => {
+  if (!databaseReady || !pool) return res.status(503).json({ ok: false, error: "database_unavailable" });
+  const requestedStatus = String(req.query.status || "pending").toLowerCase();
+  const allowed = new Set(["pending", "resolved", "rejected", "all"]);
+  const status = allowed.has(requestedStatus) ? requestedStatus : "pending";
+  const params = [];
+  const where = status === "all" ? "" : "WHERE a.status = $1";
+  if (status !== "all") params.push(status);
+  try {
+    const { rows } = await pool.query(
+      `SELECT a.id, a.report_code, a.message, a.contact, a.status, a.moderator_note, a.created_at, a.updated_at, r.target
+       FROM report_appeals a LEFT JOIN community_reports r ON r.code = a.report_code
+       ${where} ORDER BY a.created_at DESC LIMIT 200`, params);
+    res.json({ ok: true, items: rows, status });
+  } catch (error) {
+    console.error("Admin appeals load error:", error.message);
+    res.status(500).json({ ok: false, error: "admin_appeals_failed" });
+  }
+});
+
+app.patch("/api/admin/appeals/:id", requireAdmin, rateLimit({ max: 240 }), async (req, res) => {
+  if (!databaseReady || !pool) return res.status(503).json({ ok: false, error: "database_unavailable" });
+  const id = String(req.params.id || "");
+  const status = String(req.body?.status || "").toLowerCase();
+  const note = compactSpaces(req.body?.note || "").slice(0, 1000);
+  if (!["pending", "resolved", "rejected"].includes(status) || !/^[0-9a-f-]{36}$/i.test(id)) return res.status(400).json({ ok: false, error: "invalid_appeal_update" });
+  try {
+    const { rows } = await pool.query(`UPDATE report_appeals SET status=$1, moderator_note=$2, updated_at=NOW() WHERE id=$3 RETURNING id,status,updated_at`, [status,note,id]);
+    if (!rows.length) return res.status(404).json({ ok: false, error: "not_found" });
+    res.json({ ok: true, appeal: rows[0] });
+  } catch (error) {
+    console.error("Admin appeal update error:", error.message);
+    res.status(500).json({ ok: false, error: "appeal_update_failed" });
   }
 });
 
@@ -3441,6 +3583,14 @@ app.patch("/api/admin/reports/:code", requireAdmin, rateLimit({ max: 240 }), asy
   }
 });
 
+app.get("/privacy", (req, res) => {
+  res.sendFile(path.join(__dirname, "privacy.html"));
+});
+
+app.get("/terms", (req, res) => {
+  res.sendFile(path.join(__dirname, "terms.html"));
+});
+
 app.get("/reset-password", (req, res) => {
   res.set("Cache-Control", "no-store");
   res.sendFile(path.join(__dirname, "reset.html"));
@@ -3483,6 +3633,12 @@ app.post("/api/check", rateLimit({ max: 80 }), async (req, res) => {
 
 app.use(express.static(__dirname));
 
+app.use((error, req, res, next) => {
+  console.error("Unhandled request error:", error?.message || "unknown_error");
+  if (res.headersSent) return next(error);
+  res.status(500).json({ ok: false, error: "internal_error" });
+});
+
 app.get("*", (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
 });
@@ -3490,7 +3646,7 @@ app.get("*", (req, res) => {
 async function start() {
   await initDatabase();
   app.listen(PORT, () => {
-    console.log(`SafeDeal started on port ${PORT}`);
+    console.log(`SafeDeal ${APP_VERSION} started on port ${PORT}`);
     console.log(`Google Web Risk: ${GOOGLE_WEB_RISK_API_KEY ? "configured" : "not configured"}`);
     console.log(`PhishTank: enabled (${PHISHTANK_APP_KEY ? "API key configured" : "keyless / lower rate limit"})`);
     console.log(`URLhaus: ${URLHAUS_AUTH_KEY ? "configured" : "not configured"}`);

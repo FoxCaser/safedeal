@@ -1,42 +1,21 @@
-# SafeDeal
+# SafeDeal v7.0 Launch Candidate
 
-Стартовий MVP SafeDeal — адаптивна антифрод-платформа для ПК і телефона.
+Consolidated build with seller/job/link/Telegram/phone/text checks, browser OCR, PostgreSQL history/accounts, moderated complaints, appeals, admin moderation, password reset, and production hardening.
 
-## Уже є
-- адаптивний дизайн: desktop + mobile;
-- швидка перевірка продавця;
-- вакансії;
-- посилання;
-- Telegram / контакту;
-- тексту;
-- базовий Risk Score 0–100;
-- пояснення причин ризику;
-- рекомендації користувачу;
-- попередження спільноти;
-- заглушки під базу скарг, історію й профіль;
-- Node.js + Express;
-- готовність до Render.
+## Deploy
+Replace/upload these files to the repository and deploy the latest commit on Render.
 
-## Важливо
-Поточний Risk Score — це MVP-логіка на основі текстових сигналів. Вона не стверджує, що конкретна особа є шахраєм.
+Required environment variables: `DATABASE_URL`, `ADMIN_KEY`. Set `APP_BASE_URL` to the final public URL. External provider keys are optional but improve coverage.
 
-Реальна перевірка URL, репутаційних баз, редиректів, історії домену, веб-архівів і зовнішніх джерел буде підключатися окремими безпечними модулями.
+For password reset to arbitrary recipients, `RESEND_FROM` must use a domain verified in Resend. Until that is done, Resend testing restrictions still apply.
 
-SafeDeal не повинен просити або зберігати:
-- CVV/CVC;
-- PIN;
-- SMS-коди;
-- паролі;
-- повні реквізити карток.
+`SHOW_DEMO_DATA` should stay `false` in production.
 
-## Наступні етапи
-1. PostgreSQL.
-2. Реєстрація та профілі.
-3. Скарги + модерація.
-4. Безпечна URL reputation перевірка.
-5. Репутація доменів.
-6. Аналіз вакансій.
-7. Історія змін відгуків.
-8. Аналіз скринів.
-9. Моніторинг об’єктів.
-10. SafeDeal Plus і B2B API.
+## Important
+No automated anti-fraud system can guarantee that a person or deal is safe or fraudulent. SafeDeal exposes risk signals and moderated community reports, with an appeal workflow.
+
+
+## v7.1 Premium Design
+- Перенесено преміальний темно-синій/фіолетовий дизайн на реальний SafeDeal.
+- Backend, API, IDs елементів, app.js, акаунти, історія, скарги та адмінка не змінювались.
+- OLX та Instagram у промо-блоці позначені «СКОРО», щоб не заявляти функції до їх реалізації.
