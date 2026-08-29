@@ -573,8 +573,8 @@ const BRAND_PROFILES = [
   },
   {
     brand: "Facebook",
-    aliases: ["facebook", "meta"],
-    officialDomains: ["facebook.com", "fb.com", "meta.com"]
+    aliases: ["facebook"],
+    officialDomains: ["facebook.com", "fb.com", "fb.me", "meta.com"]
   },
   {
     brand: "Instagram",
@@ -589,7 +589,12 @@ const BRAND_PROFILES = [
   {
     brand: "WhatsApp",
     aliases: ["whatsapp"],
-    officialDomains: ["whatsapp.com"]
+    officialDomains: ["whatsapp.com", "wa.me"]
+  },
+  {
+    brand: "Viber",
+    aliases: ["viber"],
+    officialDomains: ["viber.com", "invite.viber.com", "vb.me"]
   },
   {
     brand: "Steam",
@@ -647,6 +652,16 @@ const CONFUSABLE_MAP = new Map(Object.entries({
 function isOfficialBrandHost(hostname, profile) {
   const host = String(hostname || "").toLowerCase().replace(/^www\./, "");
   return profile.officialDomains.some((domain) => host === domain || host.endsWith(`.${domain}`));
+}
+
+function sameOfficialBrandFamilyHost(a, b) {
+  const hostA = String(a || "").toLowerCase().replace(/^www\./, "");
+  const hostB = String(b || "").toLowerCase().replace(/^www\./, "");
+  if (!hostA || !hostB) return false;
+
+  return BRAND_PROFILES.some((profile) =>
+    isOfficialBrandHost(hostA, profile) && isOfficialBrandHost(hostB, profile)
+  );
 }
 
 function siteKey(hostname = "") {
@@ -1263,6 +1278,7 @@ function detectPageBrandIdentity(html = "", pageUrl = "", title = "", sensitive 
 
   const prominent = extractProminentPageText(html, title);
   const visible = normalizedVisiblePageText(html);
+  const officialHostProfile = BRAND_PROFILES.find((profile) => isOfficialBrandHost(hostname, profile)) || null;
   let best = null;
 
   for (const profile of BRAND_PROFILES) {
@@ -1274,6 +1290,14 @@ function detectPageBrandIdentity(html = "", pageUrl = "", title = "", sensitive 
       if (!inProminent && !(sensitive && inVisible)) continue;
 
       const strength = inTitle ? 4 : inProminent ? 3 : 2;
+
+      // A legitimate official platform page can mention/link to other brands
+      // (for example Viber mentioning Facebook). Do not call that impersonation
+      // unless the page also requests sensitive credentials/payment/OTP.
+      if (officialHostProfile && officialHostProfile.brand !== profile.brand && !sensitive) {
+        continue;
+      }
+
       const candidate = {
         detected: true,
         brand: profile.brand,
@@ -2108,9 +2132,13 @@ async function inspectUrl(rawUrl) {
 
     if (remotePage.redirects > 0) {
       facts.push(`Редиректів: ${remotePage.redirects}; кінцевий домен: ${remotePage.finalHostname}`);
-      if (!sameSiteHost(hostname, remotePage.finalHostname)) {
+      if (!sameSiteHost(hostname, remotePage.finalHostname) &&
+          !sameOfficialBrandFamilyHost(hostname, remotePage.finalHostname)) {
         points += 10;
         reasons.push(`Посилання перенаправляє на інший сайт: ${remotePage.finalHostname}`);
+      } else if (!sameSiteHost(hostname, remotePage.finalHostname) &&
+                 sameOfficialBrandFamilyHost(hostname, remotePage.finalHostname)) {
+        facts.push(`Редирект веде між офіційними доменами одного сервісу: ${hostname} → ${remotePage.finalHostname}`);
       }
     }
 
