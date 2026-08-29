@@ -26,7 +26,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
 const RESEND_FROM = process.env.RESEND_FROM || "SafeDeal <onboarding@resend.dev>";
 const APP_BASE_URL = String(process.env.APP_BASE_URL || "https://safedeal-sqlg.onrender.com").replace(/\/+$/, "");
 const SHOW_DEMO_DATA = String(process.env.SHOW_DEMO_DATA || "false").toLowerCase() === "true";
-const APP_VERSION = "7.0.0-rc1";
+const APP_VERSION = "8.2.4";
 
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
@@ -217,6 +217,28 @@ async function initDatabase() {
       )
     `);
     await pool.query(`ALTER TABLE check_history ADD COLUMN IF NOT EXISTS user_id UUID`);
+
+    // Evidence-backed archive for reviews that were previously public and later
+    // disappeared/changed. SafeDeal only displays rows marked verified; absence
+    // of a row must never be presented as proof that a platform deleted a review.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS review_evidence (
+        id BIGSERIAL PRIMARY KEY,
+        target_key TEXT NOT NULL,
+        platform TEXT NOT NULL DEFAULT '',
+        source_url TEXT NOT NULL DEFAULT '',
+        archived_text TEXT NOT NULL DEFAULT '',
+        summary TEXT NOT NULL DEFAULT '',
+        evidence_type TEXT NOT NULL DEFAULT 'snapshot_diff',
+        first_seen_at TIMESTAMPTZ,
+        missing_at TIMESTAMPTZ,
+        status TEXT NOT NULL DEFAULT 'verified',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_review_evidence_target ON review_evidence(target_key, status, created_at DESC)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_review_evidence_platform ON review_evidence(platform, status, created_at DESC)`);
+
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_check_history_client_created ON check_history(client_id, created_at DESC)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_check_history_user_created ON check_history(user_id, created_at DESC)`);
     await pool.query(`DELETE FROM auth_sessions WHERE expires_at <= NOW()`);
@@ -2645,10 +2667,18 @@ function analyzeTextSignals(type, input) {
     /\b(500|1000|2000|3000|5000)\s*(\$|usd|дол)|\bза\s*день\b|легк(і|ий)\s*гроші|без\s*досвіду.*(висок|зароб)/i;
   const deposit =
     /депозит|передоплат|активац|страхов(ий|ка)\s*внесок|внести\s*кошти|поповн(ити|ення)\s*баланс/i;
+  const depositRefund =
+    /депозит.{0,90}(поверн|вернеться|разом.{0,30}зароб)|поверн.{0,60}депозит/i;
   const cardData =
     /cvv|cvc|номер\s*карт|термін\s*дії|код\s*(з|із)\s*sms|pin|парол|одноразов(ий|ого)\s*код/i;
   const urgency =
-    /терміново|прямо\s*зараз|10\s*хвилин|5\s*хвилин|обмежен(а|ий)\s*час|тільки\s*сьогодні/i;
+    /терміново|прямо\s*зараз|\b(?:5|10|15|30)\s*хвилин|протягом\s*(?:12|24|48)\s*годин|обмежен(а|ий)\s*час|тільки\s*сьогодні/i;
+  const accountThreat =
+    /акаунт.{0,60}(заблок|обмеж|видален)|буде.{0,35}(заблок|обмеж|видален)|уникнути.{0,35}(блокув|обмеж)|доступ.{0,35}(призупин|закрит)/i;
+  const verifyData =
+    /підтверд(ити|іть|ьте).{0,45}(дан|особ|акаунт|адрес|платіж)|верифікац.{0,45}(акаунт|дан|особ)|онов(ити|іть|лення).{0,35}(дан|адрес)/i;
+  const clickLink =
+    /перейдіть.{0,35}(за\s*)?посил|натисніть.{0,35}посил|відкрийте.{0,35}посил|перейти.{0,35}посил/i;
   const suspiciousFile = /\.apk\b|\.exe\b|\.scr\b|\.msi\b|\.zip\b/i;
   const shortener = /bit\.ly|tinyurl|t\.co|cutt\.ly|goo\.gl|is\.gd/i;
   const telegram = /t\.me\/|telegram|@\w{4,}/i;
@@ -2656,8 +2686,14 @@ function analyzeTextSignals(type, input) {
   if (moneyPromises.test(text)) add(22, "Є агресивна або нереалістична обіцянка заробітку");
 
   if (deposit.test(text)) {
-    add(26, "Просять депозит / передоплату / платну активацію");
+    add(type === "job" ? 38 : 26, type === "job"
+      ? "Для початку роботи просять внести депозит / оплатити активацію"
+      : "Просять депозит / передоплату / платну активацію");
     actions.add("Не переказуйте гроші за «активацію роботи», «страхування» або доступ до завдань.");
+  }
+
+  if (type === "job" && depositRefund.test(text)) {
+    add(12, "Обіцяють повернути депозит після виконання завдань — це типова ознака ризикової схеми");
   }
 
   if (cardData.test(text)) {
@@ -2665,7 +2701,13 @@ function analyzeTextSignals(type, input) {
     actions.add("Не вводьте повні реквізити картки, CVV, PIN або SMS-коди.");
   }
 
-  if (urgency.test(text)) add(10, "Використовується тиск або штучна терміновість");
+  if (urgency.test(text)) add(12, "Використовується тиск або штучна терміновість");
+  if (accountThreat.test(text)) {
+    add(20, "Повідомлення лякає блокуванням або обмеженням акаунта");
+    actions.add("Не переходьте за посиланням із такого повідомлення. Відкрийте офіційний застосунок або сайт вручну.");
+  }
+  if (verifyData.test(text)) add(14, "Просять терміново підтвердити або оновити особисті дані");
+  if (clickLink.test(text)) add(12, "Повідомлення підштовхує перейти за посиланням для підтвердження дії");
 
   if (suspiciousFile.test(text)) {
     add(18, "Є згадка або посилання на потенційно небезпечне завантаження");
@@ -2680,7 +2722,7 @@ function analyzeTextSignals(type, input) {
       add(6, "Вакансія переводить спілкування в Telegram");
     }
 
-    if (/став(ити|те)\s*лайк|оцінювати\s*товар|викуп\s*товар|task\s*scam|виконувати\s*завдання.*комісі/i.test(text)) {
+    if (/став(ити|те)\s*лайк|лайк(и|ів).{0,40}(грн|оплат|зароб)|оцінювати\s*товар|викуп\s*товар|task\s*scam|виконувати\s*(?:прост[іи]?\s*)?завдання|за\s*кожн(е|е\s*виконане)\s*завдання/i.test(text)) {
       add(24, "Опис схожий на схему з платними завданнями / фіктивним викупом товару");
       actions.add("Не поповнюйте баланс і не «викуповуйте» товари за власні кошти для отримання комісії.");
     }
@@ -2949,6 +2991,98 @@ function analyzeReviewEvidence(input = "") {
 }
 
 
+const REVIEW_ARCHIVE_TYPES = new Set(["seller", "contact", "facebook", "instagram", "whatsapp", "viber", "olx"]);
+
+async function getVerifiedReviewEvidence(type, input) {
+  if (!REVIEW_ARCHIVE_TYPES.has(type)) {
+    return { available: false, confirmedCount: 0, items: [], note: "Для цього типу перевірки архів відгуків не застосовується." };
+  }
+
+  const targetKey = normalizeTargetKey(input);
+  const items = [];
+
+  if (databaseReady && pool && targetKey) {
+    try {
+      const { rows } = await pool.query(
+        `SELECT platform, source_url, archived_text, summary, evidence_type, first_seen_at, missing_at, created_at
+         FROM review_evidence
+         WHERE target_key = $1 AND status = 'verified'
+         ORDER BY COALESCE(missing_at, created_at) DESC
+         LIMIT 100`,
+        [targetKey]
+      );
+      for (const row of rows) {
+        items.push({
+          status: "confirmed",
+          platform: row.platform || typeLabelServer(type),
+          sourceUrl: row.source_url || "",
+          summary: compactSpaces(row.summary || row.archived_text || "Збережений відгук без короткого опису").slice(0, 600),
+          archivedText: compactSpaces(row.archived_text || "").slice(0, 1200),
+          evidenceType: row.evidence_type || "snapshot_diff",
+          firstSeenAt: row.first_seen_at || null,
+          missingAt: row.missing_at || null
+        });
+      }
+    } catch (error) {
+      console.error("Review evidence lookup failed:", error.message);
+    }
+  }
+
+  return {
+    available: true,
+    confirmedCount: items.length,
+    items,
+    note: items.length
+      ? "Показані лише записи, для яких SafeDeal має збережене підтвердження: попередній знімок/архів і факт подальшої відсутності або зміни."
+      : "SafeDeal не знайшов підтверджених доказів видалених або прихованих відгуків. Відсутність доказів не означає, що таких відгуків ніколи не було."
+  };
+}
+
+function typeLabelServer(type) {
+  return ({
+    seller: "Продавець", contact: "Telegram", facebook: "Facebook", instagram: "Instagram",
+    whatsapp: "WhatsApp", viber: "Viber", olx: "OLX", job: "Вакансія", link: "Посилання",
+    phone: "Номер телефону", text: "Текст"
+  })[type] || "Джерело";
+}
+
+function buildPlainLanguageSummary({ score, type, reasons = [], technical = null, moderatedMatchesCount = 0, reviewArchive = null }) {
+  const reasonText = reasons.join(" ").toLowerCase();
+  const subject = ({
+    link: "посилання", contact: "Telegram-профіль", facebook: "Facebook-профіль",
+    instagram: "Instagram-профіль", whatsapp: "WhatsApp-контакт", viber: "Viber-контакт",
+    olx: "OLX-оголошення або продавця", seller: "продавця", job: "вакансію",
+    phone: "номер телефону", text: "текст повідомлення"
+  })[type] || "введені дані";
+
+  if (technical?.brandImpersonation || technical?.pageBrandMismatch || /підміна|схоже на .*бренд|домен інший/.test(reasonText)) {
+    return `Ми перевірили ${subject} і знайшли ознаки, що адреса або сторінка може маскуватися під відомий сервіс. Назва схожа на оригінальну, але адреса відрізняється. Такі підміни часто використовують, щоб виманити пароль, дані картки або гроші.`;
+  }
+  if (type === "job" && /депозит|активац|платними завданнями|викуп/.test(reasonText)) {
+    return "У цій вакансії є небезпечна ознака: перед початком роботи просять внести власні гроші або оплатити «активацію». Такі схеми часто починаються з невеликих виплат, а потім вимагають більших депозитів. Справжній роботодавець зазвичай не просить платити за можливість працювати.";
+  }
+  if (/блокуванням|підтвердити або оновити|перейти за посиланням|штучна терміновість/.test(reasonText)) {
+    return `Ми перевірили ${subject}. Повідомлення створює поспіх або лякає блокуванням і підштовхує перейти за посиланням чи підтвердити дані. Це поширена схема фішингу — безпечніше самостійно відкрити офіційний застосунок або сайт, а не користуватися посиланням із повідомлення.`;
+  }
+  if (moderatedMatchesCount > 0) {
+    return `Ми перевірили ${subject} і знайшли збіг із модерованими скаргами SafeDeal. Це не доводить шахрайство саме по собі, але є вагомою причиною не поспішати з оплатою та перевірити деталі скарг.`;
+  }
+  if (reviewArchive?.confirmedCount > 0) {
+    return `Ми перевірили ${subject} і знайшли підтверджені архівні дані про відгуки, які раніше були доступні, а пізніше зникли або змінилися. Відкрийте розділ «Видалені / приховані відгуки», щоб побачити збережені докази.`;
+  }
+  if (score >= 76) {
+    return `Ми перевірили ${subject} і знайшли кілька сильних ознак небезпеки. Не переказуйте гроші та не передавайте паролі, SMS-коди чи дані картки, доки не перевірите іншу сторону незалежним способом.`;
+  }
+  if (score >= 51) {
+    return `Ми перевірили ${subject} і знайшли кілька суттєвих ознак ризику. Це не означає автоматично, що перед вами шахрай, але перед оплатою або передачею даних потрібна додаткова перевірка.`;
+  }
+  if (score >= 26) {
+    return `Ми перевірили ${subject} і знайшли окремі підозрілі ознаки. Вони можуть мати нормальне пояснення, але краще перевірити адресу, співрозмовника та умови угоди перед будь-якою оплатою.`;
+  }
+  return `Ми перевірили ${subject} і не знайшли сильних відомих ознак ризику в доступних даних. Це не гарантія безпеки: перед оплатою все одно перевіряйте особу, реквізити та адресу сайту.`;
+}
+
+
 async function analyzeInput(type, input) {
   const safeType = ALLOWED_TYPES.has(type) ? type : "seller";
   const textAnalysis = analyzeTextSignals(safeType, input);
@@ -3078,6 +3212,8 @@ async function analyzeInput(type, input) {
     facts.push("Точних збігів номера у модерованій базі SafeDeal не знайдено.");
   }
 
+  const reviewArchive = await getVerifiedReviewEvidence(safeType, input);
+
   score = Math.max(0, Math.min(100, score));
   const { level, label } = scoreToLevel(score);
   const verdict = buildHumanVerdict({
@@ -3090,6 +3226,15 @@ async function analyzeInput(type, input) {
     sellerExactPhoneMatches: safeType === "seller" ? exactPhoneModeratedMatches.length : 0,
     moderatedMatchesCount: moderatedMatches.length,
     platform
+  });
+
+  const plainSummary = buildPlainLanguageSummary({
+    score,
+    type: safeType,
+    reasons,
+    technical,
+    moderatedMatchesCount: moderatedMatches.length,
+    reviewArchive
   });
 
   if (!reasons.length) {
@@ -3105,6 +3250,8 @@ async function analyzeInput(type, input) {
     level,
     label,
     verdict,
+    plainSummary,
+    reviewArchive,
     reasons: [...new Set(reasons)],
     facts: [...new Set(facts)],
     actions: [...actions],

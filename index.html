@@ -176,6 +176,17 @@
             </div>
           </div>
 
+          <div class="plain-summary-box hidden" id="plainSummaryBox">
+            <span class="plain-summary-kicker">ПРОСТИМИ СЛОВАМИ</span>
+            <p id="plainSummaryText"></p>
+          </div>
+
+          <button class="review-archive-link hidden" id="reviewArchiveBtn" type="button">
+            <span>🗂️ Видалені / приховані відгуки</span>
+            <b id="reviewArchiveCount">0 підтверджених</b>
+            <i>›</i>
+          </button>
+
           <details class="technical-box hidden" id="technicalBox">
             <summary class="technical-head">
               <h4>Показати технічні деталі</h4>
@@ -381,7 +392,27 @@
     </nav>
   </div>
 
+  <div class="sd-modal hidden" id="reviewArchiveModal" role="dialog" aria-modal="true" aria-labelledby="reviewArchiveTitle">
+    <div class="sd-modal-card">
+      <button class="sd-modal-close" id="closeReviewArchive" type="button" aria-label="Закрити">×</button>
+      <span class="eyebrow">REVIEW ARCHIVE</span>
+      <h3 id="reviewArchiveTitle">Видалені / приховані відгуки</h3>
+      <p class="sd-modal-note" id="reviewArchiveNote"></p>
+      <div class="review-archive-stats"><strong id="reviewArchiveConfirmed">0</strong><span>підтверджених записів</span></div>
+      <div class="review-archive-items" id="reviewArchiveItems"></div>
+    </div>
+  </div>
+
+  <div class="sd-modal hidden" id="reportDetailModal" role="dialog" aria-modal="true" aria-labelledby="reportDetailTitle">
+    <div class="sd-modal-card">
+      <button class="sd-modal-close" id="closeReportDetail" type="button" aria-label="Закрити">×</button>
+      <span class="eyebrow">COMMUNITY REPORT</span>
+      <h3 id="reportDetailTitle">Деталі скарги</h3>
+      <div id="reportDetailBody"></div>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js" defer></script>
-  <script src="/app.js?v=8.2.1" defer></script>
+  <script src="/app.js?v=8.2.4" defer></script>
 </body>
 </html>

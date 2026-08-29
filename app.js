@@ -2,6 +2,7 @@ const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
 
 const state = {
+  currentReviewArchive: null,
   type: "seller",
   screenshotFile: null,
   screenshotOcrText: ""
@@ -578,6 +579,26 @@ $("#runCheck").addEventListener("click", async () => {
     $("#verdictText").textContent = verdict.text || "";
     $("#verdictEvidence").textContent = verdict.evidence || "";
 
+    const plainSummaryBox = $("#plainSummaryBox");
+    const plainSummaryText = $("#plainSummaryText");
+    if (r.plainSummary) {
+      plainSummaryText.textContent = r.plainSummary;
+      plainSummaryBox.classList.remove("hidden");
+    } else {
+      plainSummaryText.textContent = "";
+      plainSummaryBox.classList.add("hidden");
+    }
+
+    state.currentReviewArchive = r.reviewArchive || null;
+    const reviewArchiveBtn = $("#reviewArchiveBtn");
+    const reviewArchiveCount = $("#reviewArchiveCount");
+    if (r.reviewArchive?.available) {
+      reviewArchiveCount.textContent = `${Number(r.reviewArchive.confirmedCount) || 0} підтверджених`;
+      reviewArchiveBtn.classList.remove("hidden");
+    } else {
+      reviewArchiveBtn.classList.add("hidden");
+    }
+
     const reasonIsOnlyNoSignal = r.reasons.length === 1 &&
       /не знайдено явних типових сигналів/i.test(r.reasons[0]);
     $("#reasonList").innerHTML = r.reasons.map((x) =>
@@ -881,17 +902,96 @@ async function loadReports() {
     return;
   }
 
-  results.innerHTML = data.items.map((item) => `
-    <article class="report-row">
+  state.reportSearchItems = data.items;
+  results.innerHTML = data.items.map((item, index) => `
+    <article class="report-row report-row-clickable" data-report-index="${index}" tabindex="0" role="button" aria-label="Відкрити деталі скарги">
       <div class="report-row-top">
         <span class="report-type">${escapeHtml(typeLabel(item.type))}</span>
         <span class="report-status">${escapeHtml(item.statusLabel || "Перевірено")}</span>
       </div>
       <h4>${escapeHtml(item.target)}</h4>
       <p>${escapeHtml(item.reason || item.reasons?.[0] || "Є підтверджені сигнали ризику")}</p>
-      <small>${escapeHtml(item.updatedAt || "")}</small>
+      <div class="report-row-foot"><small>${escapeHtml(item.updatedAt || "")}</small><span>Відкрити ›</span></div>
     </article>
   `).join("");
+}
+
+
+function openReviewArchiveModal() {
+  const modal = $("#reviewArchiveModal");
+  const archive = state.currentReviewArchive;
+  if (!modal || !archive) return;
+  $("#reviewArchiveConfirmed").textContent = Number(archive.confirmedCount) || 0;
+  $("#reviewArchiveNote").textContent = archive.note || "SafeDeal показує тільки записи з доказами.";
+  const items = Array.isArray(archive.items) ? archive.items : [];
+  $("#reviewArchiveItems").innerHTML = items.length
+    ? items.map((item) => `
+      <article class="review-archive-item">
+        <div><b>${escapeHtml(item.platform || "Джерело")}</b><span>Підтверджений архівний запис</span></div>
+        <p>${escapeHtml(item.summary || item.archivedText || "Збережений текст відгуку")}</p>
+        ${item.archivedText && item.archivedText !== item.summary ? `<blockquote>${escapeHtml(item.archivedText)}</blockquote>` : ""}
+        <small>${item.firstSeenAt ? `Було видно: ${escapeHtml(new Date(item.firstSeenAt).toLocaleDateString("uk-UA"))}` : ""}${item.missingAt ? ` · Зникло/змінилося: ${escapeHtml(new Date(item.missingAt).toLocaleDateString("uk-UA"))}` : ""}</small>
+      </article>`).join("")
+    : `<div class="empty-state compact">Підтверджених видалених або прихованих відгуків не знайдено.</div>`;
+  modal.classList.remove("hidden");
+  document.body.classList.add("modal-open");
+}
+
+function closeModal(id) {
+  const modal = $(id);
+  if (modal) modal.classList.add("hidden");
+  document.body.classList.remove("modal-open");
+}
+
+function openReportDetail(item) {
+  if (!item) return;
+  const modal = $("#reportDetailModal");
+  const body = $("#reportDetailBody");
+  if (!modal || !body) return;
+  body.innerHTML = `
+    <div class="report-detail-meta"><span>${escapeHtml(typeLabel(item.type))}</span><b>${escapeHtml(item.statusLabel || "Перевірено модерацією")}</b></div>
+    <h4>${escapeHtml(item.target || "—")}</h4>
+    <div class="report-detail-section"><small>Причина</small><p>${escapeHtml(item.reason || "Не вказано")}</p></div>
+    <div class="report-detail-section"><small>Опис</small><p>${escapeHtml(item.details || "Додаткових деталей немає.")}</p></div>
+    <div class="report-detail-bottom"><span>Код: ${escapeHtml(item.code || "—")}</span><span>${escapeHtml(item.updatedAt || "")}</span></div>
+    <p class="sd-modal-note">Це модерована скарга користувача SafeDeal, а не автоматичне твердження про шахрайство.</p>`;
+  modal.classList.remove("hidden");
+  document.body.classList.add("modal-open");
+}
+
+$("#reviewArchiveBtn")?.addEventListener("click", openReviewArchiveModal);
+$("#closeReviewArchive")?.addEventListener("click", () => closeModal("#reviewArchiveModal"));
+$("#closeReportDetail")?.addEventListener("click", () => closeModal("#reportDetailModal"));
+
+$("#reviewArchiveModal")?.addEventListener("click", (e) => {
+  if (e.target.id === "reviewArchiveModal") closeModal("#reviewArchiveModal");
+});
+$("#reportDetailModal")?.addEventListener("click", (e) => {
+  if (e.target.id === "reportDetailModal") closeModal("#reportDetailModal");
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    closeModal("#reviewArchiveModal");
+    closeModal("#reportDetailModal");
+  }
+});
+
+const reportResults = $("#reportResults");
+if (reportResults) {
+  const openFromEvent = (e) => {
+    const row = e.target.closest?.("[data-report-index]");
+    if (!row) return;
+    const index = Number(row.dataset.reportIndex);
+    openReportDetail(state.reportSearchItems?.[index]);
+  };
+  reportResults.addEventListener("click", openFromEvent);
+  reportResults.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      openFromEvent(e);
+    }
+  });
 }
 
 const searchReports = $("#searchReports");
