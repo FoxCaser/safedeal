@@ -398,7 +398,8 @@ function normalizeTargetKey(value = "") {
 
   const phoneDigits = raw.replace(/\D/g, "");
   if (/^[+\d\s().-]{8,}$/.test(raw) && phoneDigits.length >= 8) {
-    return phoneDigits;
+    const normalizedPhone = extractPhoneTarget(raw);
+    return normalizedPhone?.valid ? normalizedPhone.digits : phoneDigits;
   }
 
   const telegramMatch = raw.match(/(?:https?:\/\/)?t\.me\/([a-z0-9_]{4,})/i);
@@ -761,7 +762,7 @@ function scoreToLevel(score) {
 }
 
 
-function buildHumanVerdict({ score, type, telegram, phone, phoneModeratedMatches = 0 }) {
+function buildHumanVerdict({ score, type, telegram, phone, phoneModeratedMatches = 0, sellerModeratedMatches = 0, sellerExactPhoneMatches = 0 }) {
   const telegramLimited =
     type === "contact" &&
     telegram &&
@@ -786,6 +787,27 @@ function buildHumanVerdict({ score, type, telegram, phone, phoneModeratedMatches
       title: "Збігів у базі SafeDeal не знайдено",
       text: "Цей номер не збігся з модерованими скаргами SafeDeal. Це не підтверджує особу власника номера і не гарантує безпеку угоди.",
       evidence: "Перевірено точний номер"
+    };
+  }
+
+  if (type === "phone" && phoneModeratedMatches > 0) {
+    return {
+      kind: score >= 51 ? "danger" : "warning",
+      title: "Є підтверджені скарги на цей номер",
+      text: `У модерованій базі SafeDeal знайдено підтверджених скарг: ${phoneModeratedMatches}. Перегляньте записи та не переказуйте гроші без додаткової перевірки.`,
+      evidence: `Точних збігів: ${phoneModeratedMatches}`
+    };
+  }
+
+  if (type === "seller" && sellerModeratedMatches > 0) {
+    const exactText = sellerExactPhoneMatches > 0
+      ? ` Точних збігів за номером телефону: ${sellerExactPhoneMatches}.`
+      : "";
+    return {
+      kind: score >= 51 ? "danger" : "warning",
+      title: "Є попередження щодо цього продавця",
+      text: `У модерованій базі SafeDeal знайдено підтверджених скарг: ${sellerModeratedMatches}.${exactText} Перевірте деталі перед оплатою або передачею даних.`,
+      evidence: `Підтверджених збігів: ${sellerModeratedMatches}`
     };
   }
 
@@ -2632,7 +2654,9 @@ async function findCommunityMatches(input) {
 
   for (const match of text.matchAll(/[+\d][\d\s().-]{7,}/g)) {
     const digits = match[0].replace(/\D/g, "");
-    if (digits.length >= 8) candidates.add(digits);
+    const normalizedPhone = extractPhoneTarget(match[0]);
+    if (normalizedPhone?.valid) candidates.add(normalizedPhone.digits);
+    else if (digits.length >= 8) candidates.add(digits);
   }
 
   for (const match of text.matchAll(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi)) {
@@ -2657,7 +2681,8 @@ async function analyzeInput(type, input) {
   const facts = [];
   const actions = new Set(textAnalysis.actions);
   let technical = null;
-  const phone = safeType === "phone" ? extractPhoneTarget(input) : null;
+  const detectedPhone = extractPhoneTarget(input);
+  const phone = safeType === "phone" ? detectedPhone : null;
 
   if (safeType === "phone") {
     if (!phone?.valid) {
@@ -2706,16 +2731,34 @@ async function analyzeInput(type, input) {
 
   const communityMatches = await findCommunityMatches(input);
   const moderatedMatches = communityMatches.filter((x) => !String(x.code).startsWith("DEMO-"));
+  const exactPhoneModeratedMatches = detectedPhone?.valid
+    ? moderatedMatches.filter((report) => normalizeTargetKey(report.targetKey || report.target) === detectedPhone.digits)
+    : [];
+
   if (moderatedMatches.length) {
-    const points = safeType === "phone"
-      ? Math.min(82, 55 + (moderatedMatches.length - 1) * 15)
-      : Math.min(28, 12 + (moderatedMatches.length - 1) * 5);
+    let points;
+
+    // A confirmed complaint tied to the exact phone number must carry the same
+    // weight in both “Phone” and “Seller” modes. This prevents a seller check
+    // from showing a green verdict for a number already present in moderation.
+    if ((safeType === "phone" || safeType === "seller") && exactPhoneModeratedMatches.length > 0) {
+      points = exactPhoneModeratedMatches.length >= 3
+        ? 90
+        : exactPhoneModeratedMatches.length * 35;
+    } else {
+      points = Math.min(28, 12 + (moderatedMatches.length - 1) * 5);
+    }
+
     score += points;
+
     if (safeType === "phone") {
-      reasons.push(`Точний номер знайдено у модерованій базі скарг SafeDeal: ${moderatedMatches.length}`);
+      reasons.push(`Точний номер знайдено у модерованій базі скарг SafeDeal: ${exactPhoneModeratedMatches.length || moderatedMatches.length}`);
+    } else if (safeType === "seller" && exactPhoneModeratedMatches.length > 0) {
+      reasons.push(`На точний номер продавця є підтверджені скарги SafeDeal: ${exactPhoneModeratedMatches.length}`);
     } else {
       reasons.push(`У модерованій базі SafeDeal знайдено збігів: ${moderatedMatches.length}`);
     }
+
     actions.add("Перегляньте записи в базі скарг і перевірте факти перед оплатою або передачею даних.");
   } else if (safeType === "phone" && phone?.valid) {
     facts.push("Точних збігів номера у модерованій базі SafeDeal не знайдено.");
@@ -2728,7 +2771,9 @@ async function analyzeInput(type, input) {
     type: safeType,
     telegram,
     phone,
-    phoneModeratedMatches: moderatedMatches.length
+    phoneModeratedMatches: safeType === "phone" ? exactPhoneModeratedMatches.length : 0,
+    sellerModeratedMatches: safeType === "seller" ? moderatedMatches.length : 0,
+    sellerExactPhoneMatches: safeType === "seller" ? exactPhoneModeratedMatches.length : 0
   });
 
   if (!reasons.length) {
@@ -2764,7 +2809,7 @@ async function analyzeInput(type, input) {
     phone: phone?.valid ? {
       normalized: phone.normalized,
       country: phone.country,
-      exactModeratedMatches: moderatedMatches.length
+      exactModeratedMatches: exactPhoneModeratedMatches.length
     } : null,
     communityMatches: communityMatches.length,
     disclaimer:
