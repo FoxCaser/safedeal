@@ -198,6 +198,23 @@ $("#runCheck").addEventListener("click", async () => {
                   ? `На хості є malware URL (${t.urlHausHostUrlCount || 1})`
                   : "Збігів немає";
 
+      const spoofText =
+        t.brandImpersonation
+          ? `Схоже на ${t.brandTarget || "відомий бренд"}`
+          : t.mixedScript
+            ? "Змішані алфавіти"
+            : t.punycode
+              ? "Punycode"
+              : "Ознак підміни немає";
+
+      const structureFlags = [];
+      if (t.bidiOrInvisible) structureFlags.push("невидимі/bidi символи");
+      if (t.encodedAuthority) structureFlags.push("кодована адреса");
+      if (t.nonStandardPort) structureFlags.push("нестандартний порт");
+      if (t.longHostname) structureFlags.push("дуже довгий домен");
+      else if (t.longUrl) structureFlags.push("дуже довгий URL");
+      const structureText = structureFlags.length ? structureFlags.join(", ") : "Без явних трюків";
+
       const sslText =
         t.finalProtocol !== "https"
           ? "Немає HTTPS"
@@ -221,6 +238,8 @@ $("#runCheck").addEventListener("click", async () => {
       techGrid.innerHTML = `
         <div class="tech-item"><span>🌐 Домен</span><b>${escapeHtml(t.hostname || "—")}</b></div>
         <div class="tech-item"><span>🔒 Протокол</span><b>${escapeHtml(String(t.protocol || "—").toUpperCase())}</b></div>
+        <div class="tech-item"><span>🪞 Підміна домену</span><b>${escapeHtml(spoofText)}</b></div>
+        <div class="tech-item"><span>🧬 Структура URL</span><b>${escapeHtml(structureText)}</b></div>
         <div class="tech-item"><span>📅 Вік домену</span><b>${escapeHtml(ageText)}</b></div>
         <div class="tech-item"><span>🛰 DNS</span><b>${Array.isArray(t.dns) && t.dns.length ? `${t.dns.length} адрес(и)` : "Не знайдено"}</b></div>
         <div class="tech-item"><span>🛡 Google Web Risk</span><b>${escapeHtml(webRiskText)}</b></div>

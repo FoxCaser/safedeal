@@ -7,6 +7,7 @@ const net = require("net");
 const http = require("http");
 const https = require("https");
 const tls = require("tls");
+const { domainToUnicode } = require("url");
 const helmet = require("helmet");
 const compression = require("compression");
 const cors = require("cors");
@@ -201,6 +202,258 @@ function isPrivateOrReservedIp(ip) {
     normalized.startsWith("fea") ||
     normalized.startsWith("feb")
   );
+}
+
+
+const BRAND_PROFILES = [
+  {
+    brand: "Google",
+    aliases: ["google", "gmail"],
+    officialDomains: ["google.com", "gmail.com", "googleusercontent.com", "gstatic.com", "googleapis.com", "youtube.com"]
+  },
+  {
+    brand: "PayPal",
+    aliases: ["paypal"],
+    officialDomains: ["paypal.com"]
+  },
+  {
+    brand: "Apple",
+    aliases: ["apple", "icloud"],
+    officialDomains: ["apple.com", "icloud.com"]
+  },
+  {
+    brand: "Microsoft",
+    aliases: ["microsoft", "outlook", "office", "onedrive"],
+    officialDomains: ["microsoft.com", "microsoftonline.com", "live.com", "outlook.com", "office.com", "office365.com", "onedrive.com"]
+  },
+  {
+    brand: "Amazon",
+    aliases: ["amazon"],
+    officialDomains: ["amazon.com", "amazon.co.uk", "amazon.de", "amazon.pl", "amazon.fr", "amazon.it", "amazon.es", "amazon.ca", "amazon.co.jp"]
+  },
+  {
+    brand: "Facebook",
+    aliases: ["facebook", "meta"],
+    officialDomains: ["facebook.com", "fb.com", "meta.com"]
+  },
+  {
+    brand: "Instagram",
+    aliases: ["instagram"],
+    officialDomains: ["instagram.com"]
+  },
+  {
+    brand: "Telegram",
+    aliases: ["telegram"],
+    officialDomains: ["telegram.org", "t.me"]
+  },
+  {
+    brand: "WhatsApp",
+    aliases: ["whatsapp"],
+    officialDomains: ["whatsapp.com"]
+  },
+  {
+    brand: "Steam",
+    aliases: ["steam", "steamcommunity", "steampowered"],
+    officialDomains: ["steampowered.com", "steamcommunity.com", "steamgames.com"]
+  },
+  {
+    brand: "Discord",
+    aliases: ["discord"],
+    officialDomains: ["discord.com", "discord.gg"]
+  },
+  {
+    brand: "Binance",
+    aliases: ["binance"],
+    officialDomains: ["binance.com"]
+  },
+  {
+    brand: "ПриватБанк",
+    aliases: ["privatbank", "privat24"],
+    officialDomains: ["privatbank.ua", "privat24.ua"]
+  },
+  {
+    brand: "monobank",
+    aliases: ["monobank"],
+    officialDomains: ["monobank.ua"]
+  },
+  {
+    brand: "Нова пошта",
+    aliases: ["novaposhta", "novaposhta"],
+    officialDomains: ["novaposhta.ua"]
+  }
+];
+
+const COMMON_MULTI_LEVEL_SUFFIXES = new Set([
+  "co.uk", "org.uk", "gov.uk", "ac.uk",
+  "com.ua", "net.ua", "org.ua", "gov.ua",
+  "com.au", "net.au", "org.au",
+  "co.jp", "co.kr", "co.in", "com.br", "com.tr"
+]);
+
+const CONFUSABLE_MAP = new Map(Object.entries({
+  // Cyrillic look-alikes.
+  "а": "a", "е": "e", "ё": "e", "о": "o", "р": "p", "с": "c", "х": "x", "у": "y", "і": "i", "ї": "i", "ј": "j", "ӏ": "l", "ԛ": "q",
+  // Greek look-alikes.
+  "α": "a", "β": "b", "ε": "e", "ι": "i", "κ": "k", "ο": "o", "ρ": "p", "τ": "t", "υ": "y", "χ": "x", "ν": "v",
+  // ASCII digit/symbol substitutions often used in typosquatting.
+  "0": "o", "1": "l", "3": "e", "4": "a", "5": "s", "7": "t", "8": "b", "9": "g"
+}));
+
+function isOfficialBrandHost(hostname, profile) {
+  const host = String(hostname || "").toLowerCase().replace(/^www\./, "");
+  return profile.officialDomains.some((domain) => host === domain || host.endsWith(`.${domain}`));
+}
+
+function siteKey(hostname = "") {
+  const labels = String(hostname).toLowerCase().replace(/^www\./, "").split(".").filter(Boolean);
+  if (labels.length <= 2) return labels.join(".");
+  const suffix2 = labels.slice(-2).join(".");
+  if (COMMON_MULTI_LEVEL_SUFFIXES.has(suffix2) && labels.length >= 3) {
+    return labels.slice(-3).join(".");
+  }
+  return suffix2;
+}
+
+function sameSiteHost(a, b) {
+  if (!a || !b) return false;
+  return siteKey(a) === siteKey(b);
+}
+
+function scriptKinds(value = "") {
+  const kinds = [];
+  if (/\p{Script=Latin}/u.test(value)) kinds.push("latin");
+  if (/\p{Script=Cyrillic}/u.test(value)) kinds.push("cyrillic");
+  if (/\p{Script=Greek}/u.test(value)) kinds.push("greek");
+  return kinds;
+}
+
+function visualSkeleton(value = "") {
+  let normalized = String(value)
+    .normalize("NFKD")
+    .toLowerCase()
+    .replace(/[\u0300-\u036f]/g, "");
+
+  let out = "";
+  for (const char of normalized) out += CONFUSABLE_MAP.get(char) || char;
+
+  return out
+    .replace(/rn/g, "m")
+    .replace(/vv/g, "w")
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function levenshteinDistance(a = "", b = "") {
+  const x = String(a);
+  const y = String(b);
+  if (x === y) return 0;
+  if (!x.length) return y.length;
+  if (!y.length) return x.length;
+
+  let prev = Array.from({ length: y.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= x.length; i++) {
+    const curr = [i];
+    for (let j = 1; j <= y.length; j++) {
+      curr[j] = Math.min(
+        curr[j - 1] + 1,
+        prev[j] + 1,
+        prev[j - 1] + (x[i - 1] === y[j - 1] ? 0 : 1)
+      );
+    }
+    prev = curr;
+  }
+  return prev[y.length];
+}
+
+function analyzeDomainSpoof(rawUrl, parsed) {
+  const hostname = parsed.hostname.toLowerCase().replace(/\.$/, "");
+  const unicodeHostname = domainToUnicode(hostname) || hostname;
+  const labels = unicodeHostname.split(".").filter(Boolean);
+  const punycode = hostname.split(".").some((label) => label.startsWith("xn--"));
+  const mixedScriptLabels = labels.filter((label) => {
+    if (!/[^\x00-\x7F]/.test(label)) return false;
+    return scriptKinds(label).length >= 2;
+  });
+
+  const authorityMatch = String(rawUrl).match(/^https?:\/\/([^/?#]*)/i);
+  const rawAuthority = authorityMatch ? authorityMatch[1] : "";
+  const encodedAuthority = /%[0-9a-f]{2}/i.test(rawAuthority);
+  const bidiOrInvisible = /[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/u.test(String(rawUrl));
+  const encodedSequences = (String(rawUrl).match(/%[0-9a-f]{2}/gi) || []).length;
+  const longUrl = String(rawUrl).length > 220;
+  const longHostname = hostname.length > 70;
+  const nonStandardPort = Boolean(parsed.port) && !(
+    (parsed.protocol === "https:" && parsed.port === "443") ||
+    (parsed.protocol === "http:" && parsed.port === "80")
+  );
+
+  let brandImpersonation = false;
+  let brandTarget = null;
+  let brandKind = null;
+  let brandEvidence = null;
+  let brandDistance = null;
+
+  for (const profile of BRAND_PROFILES) {
+    if (isOfficialBrandHost(hostname, profile)) continue;
+
+    for (const unicodeLabel of labels) {
+      const plainLabel = unicodeLabel.toLowerCase().replace(/[^\p{L}\p{N}-]/gu, "");
+      const skeleton = visualSkeleton(plainLabel);
+
+      for (const alias of profile.aliases) {
+        const aliasSkeleton = visualSkeleton(alias);
+        if (!aliasSkeleton || skeleton.length < 4) continue;
+
+        if (skeleton === aliasSkeleton && plainLabel !== alias) {
+          brandImpersonation = true;
+          brandTarget = profile.brand;
+          brandKind = "visual";
+          brandEvidence = unicodeLabel;
+          brandDistance = 0;
+          break;
+        }
+
+        const distance = levenshteinDistance(skeleton, aliasSkeleton);
+        const maxDistance = aliasSkeleton.length >= 8 ? 1 : (aliasSkeleton.length >= 5 ? 1 : 0);
+        if (distance <= maxDistance && skeleton !== aliasSkeleton) {
+          brandImpersonation = true;
+          brandTarget = profile.brand;
+          brandKind = "typo";
+          brandEvidence = unicodeLabel;
+          brandDistance = distance;
+          break;
+        }
+
+        if (skeleton.includes(aliasSkeleton) && skeleton !== aliasSkeleton && aliasSkeleton.length >= 5) {
+          brandImpersonation = true;
+          brandTarget = profile.brand;
+          brandKind = "keyword";
+          brandEvidence = unicodeLabel;
+          brandDistance = null;
+          break;
+        }
+      }
+      if (brandImpersonation) break;
+    }
+    if (brandImpersonation) break;
+  }
+
+  return {
+    unicodeHostname,
+    punycode,
+    mixedScript: mixedScriptLabels.length > 0,
+    mixedScriptLabels: mixedScriptLabels.slice(0, 3),
+    brandImpersonation,
+    brandTarget,
+    brandKind,
+    brandEvidence,
+    brandDistance,
+    encodedAuthority,
+    bidiOrInvisible,
+    encodedSequences,
+    longUrl,
+    longHostname,
+    nonStandardPort
+  };
 }
 
 function scoreToLevel(score) {
@@ -871,6 +1124,7 @@ async function inspectUrl(rawUrl) {
   }
 
   const hostname = parsed.hostname.toLowerCase().replace(/\.$/, "");
+  const spoof = analyzeDomainSpoof(rawUrl, parsed);
 
   if (
     hostname === "localhost" ||
@@ -924,9 +1178,52 @@ async function inspectUrl(rawUrl) {
     reasons.push("Замість доменного імені використовується пряма IP-адреса");
   }
 
-  if (hostname.startsWith("xn--") || hostname.includes(".xn--")) {
-    points += 14;
+  if (spoof.bidiOrInvisible) {
+    points += 45;
+    reasons.push("URL містить невидимі або bidi-символи, які можуть підміняти порядок чи вигляд адреси");
+  }
+
+  if (spoof.punycode) {
+    points += 18;
     reasons.push("Домен використовує Punycode; візуально він може імітувати іншу назву");
+    if (spoof.unicodeHostname && spoof.unicodeHostname !== hostname) {
+      facts.push(`Punycode декодується як: ${spoof.unicodeHostname}`);
+    }
+  }
+
+  if (spoof.mixedScript) {
+    points += 30;
+    reasons.push("В одному доменному імені змішані різні алфавіти (наприклад латиниця й кирилиця) — типовий прийом homograph-фішингу");
+  }
+
+  if (spoof.brandImpersonation) {
+    const kindPoints = spoof.brandKind === "visual" ? 38 : spoof.brandKind === "typo" ? 30 : 18;
+    points += kindPoints;
+    const detail = spoof.brandEvidence ? ` (${spoof.brandEvidence})` : "";
+    reasons.push(`Домен схожий на підміну бренду ${spoof.brandTarget || "відомого сервісу"}${detail}`);
+  }
+
+  if (spoof.encodedAuthority) {
+    points += 16;
+    reasons.push("У частині URL з адресою сайту використано percent-encoding, що може приховувати справжній домен");
+  }
+
+  if (spoof.encodedSequences >= 8) {
+    points += 6;
+    reasons.push("URL містить незвично багато закодованих символів");
+  }
+
+  if (spoof.nonStandardPort) {
+    points += 6;
+    reasons.push(`URL використовує нестандартний порт ${parsed.port}`);
+  }
+
+  if (spoof.longHostname) {
+    points += 6;
+    reasons.push("Доменне ім’я незвично довге й може маскувати важливі частини адреси");
+  } else if (spoof.longUrl) {
+    points += 4;
+    reasons.push("Посилання незвично довге; перевірте кінцевий домен і параметри URL");
   }
 
   if (!dnsResult.ok) {
@@ -1026,6 +1323,10 @@ async function inspectUrl(rawUrl) {
 
     if (remotePage.redirects > 0) {
       facts.push(`Редиректів: ${remotePage.redirects}; кінцевий домен: ${remotePage.finalHostname}`);
+      if (!sameSiteHost(hostname, remotePage.finalHostname)) {
+        points += 10;
+        reasons.push(`Посилання перенаправляє на інший сайт: ${remotePage.finalHostname}`);
+      }
     }
 
     if (remotePage.httpsDowngrade) {
@@ -1122,6 +1423,21 @@ async function inspectUrl(rawUrl) {
     technical: {
       hostname,
       protocol: parsed.protocol.replace(":", ""),
+      unicodeHostname: spoof.unicodeHostname || hostname,
+      punycode: Boolean(spoof.punycode),
+      mixedScript: Boolean(spoof.mixedScript),
+      mixedScriptLabels: spoof.mixedScriptLabels || [],
+      brandImpersonation: Boolean(spoof.brandImpersonation),
+      brandTarget: spoof.brandTarget || null,
+      brandKind: spoof.brandKind || null,
+      brandEvidence: spoof.brandEvidence || null,
+      brandDistance: Number.isFinite(spoof.brandDistance) ? spoof.brandDistance : null,
+      encodedAuthority: Boolean(spoof.encodedAuthority),
+      encodedSequences: Number(spoof.encodedSequences || 0),
+      bidiOrInvisible: Boolean(spoof.bidiOrInvisible),
+      nonStandardPort: Boolean(spoof.nonStandardPort),
+      longHostname: Boolean(spoof.longHostname),
+      longUrl: Boolean(spoof.longUrl),
       dns: dnsResult.addresses,
       registrationDate: rdap.registrationDate || null,
       domainAgeDays: rdap.ageDays ?? null,
@@ -1157,6 +1473,7 @@ async function inspectUrl(rawUrl) {
       finalHostname: remotePage.finalHostname || hostname,
       finalProtocol: remotePage.finalProtocol || parsed.protocol.replace(":", ""),
       crossHostRedirect: Boolean(remotePage.crossHostRedirect),
+      finalDifferentSite: Boolean(remotePage.ok && !sameSiteHost(hostname, remotePage.finalHostname || hostname)),
       httpsDowngrade: Boolean(remotePage.httpsDowngrade),
       tlsPresent: Boolean(remotePage.tls),
       tlsAuthorized: remotePage.tls ? Boolean(remotePage.tls.authorized) : null,
