@@ -1839,7 +1839,15 @@ async function checkPhishDestroy(hostname) {
 
 function isSharedPlatformHost(hostname = "") {
   const host = String(hostname || "").toLowerCase().replace(/^www\./, "");
-  return ["t.me", "telegram.me", "telegram.dog"].includes(host);
+  const sharedHosts = [
+    "t.me", "telegram.me", "telegram.dog",
+    "wa.me", "whatsapp.com", "api.whatsapp.com",
+    "facebook.com", "m.facebook.com", "fb.com", "fb.me",
+    "instagram.com",
+    "viber.com", "invite.viber.com", "vb.me",
+    "olx.ua", "olx.pl", "olx.ro", "olx.bg", "olx.kz", "olx.uz", "olx.com"
+  ];
+  return sharedHosts.some((domain) => host === domain || host.endsWith(`.${domain}`));
 }
 
 async function inspectUrl(rawUrl) {
@@ -2014,7 +2022,7 @@ async function inspectUrl(rawUrl) {
   if (phishDestroy.ok) {
     if (phishDestroy.threat) {
       if (isSharedPlatformHost(hostname)) {
-        facts.push(`PhishDestroy має доменний сигнал для спільного домену ${hostname}; без точного збігу конкретного Telegram-посилання цей сигнал не додає ризику акаунту`);
+        facts.push(`PhishDestroy має доменний сигнал для спільного домену ${hostname}; без точного збігу конкретного посилання цей доменний сигнал не додає ризику профілю`);
       } else {
         const severityPoints = phishDestroy.severity === "critical" ? 65
           : phishDestroy.severity === "high" ? 55
@@ -2049,7 +2057,7 @@ async function inspectUrl(rawUrl) {
     if (urlHaus.threat) facts.push(`URLhaus: тип загрози — ${urlHaus.threat}`);
   } else if (urlHaus.hostMatch) {
     if (isSharedPlatformHost(hostname)) {
-      facts.push(`URLhaus знає ${urlHaus.hostUrlCount || 1} шкідливих URL на спільному домені ${hostname}, але точного збігу цього посилання немає — це не додає ризику конкретному Telegram-акаунту`);
+      facts.push(`URLhaus знає ${urlHaus.hostUrlCount || 1} шкідливих URL на спільному домені ${hostname}, але точного збігу цього посилання немає — це не додає ризику конкретному профілю або контакту`);
     } else {
       points += 24;
       reasons.push(`URLhaus знає ${urlHaus.hostUrlCount || 1} шкідливих URL на цьому хості; точного збігу поточного URL немає`);
@@ -2077,7 +2085,7 @@ async function inspectUrl(rawUrl) {
     const typeText = threatFox.item?.threatTypeDesc || threatFox.item?.threatType || "відомим IOC";
 
     if (threatFox.matchType !== "url" && isSharedPlatformHost(hostname)) {
-      facts.push(`ThreatFox має доменний IOC для спільного домену ${hostname}, але не точний IOC цього Telegram-посилання — доменний збіг не додає ризику конкретному акаунту`);
+      facts.push(`ThreatFox має доменний IOC для спільного домену ${hostname}, але не точний IOC цього посилання — доменний збіг не додає ризику конкретному профілю або контакту`);
     } else {
       const basePoints = threatFox.matchType === "url" ? 68 : 52;
       points += basePoints + confidenceBonus;
