@@ -385,6 +385,49 @@ async function checkPhishTank(url) {
   }
 }
 
+
+async function checkPhishDestroy(hostname) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 6000);
+
+  try {
+    const response = await fetch(
+      `https://api.destroy.tools/v1/check?domain=${encodeURIComponent(hostname)}`,
+      {
+        signal: controller.signal,
+        headers: {
+          Accept: "application/json",
+          "User-Agent": "SafeDeal/1.0"
+        }
+      }
+    );
+
+    if (!response.ok) {
+      return { ok: false, status: response.status, threat: false };
+    }
+
+    const data = await response.json();
+    return {
+      ok: true,
+      status: response.status,
+      threat: data?.threat === true,
+      riskScore: Number.isFinite(Number(data?.risk_score)) ? Number(data.risk_score) : 0,
+      severity: String(data?.severity || "").toLowerCase(),
+      active: data?.active === true,
+      flags: Array.isArray(data?.flags) ? data.flags : [],
+      matchedKeywords: Array.isArray(data?.matched_keywords) ? data.matched_keywords : []
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error.name || "phishdestroy_failed",
+      threat: false
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function inspectUrl(rawUrl) {
   let parsed;
   try {
@@ -421,10 +464,11 @@ async function inspectUrl(rawUrl) {
     };
   }
 
-  const [rdap, webRisk, phishTank] = await Promise.all([
+  const [rdap, webRisk, phishTank, phishDestroy] = await Promise.all([
     lookupRdap(hostname),
     checkGoogleWebRisk(rawUrl),
-    checkPhishTank(rawUrl)
+    checkPhishTank(rawUrl),
+    checkPhishDestroy(hostname)
   ]);
 
   const reasons = [];
@@ -506,6 +550,21 @@ async function inspectUrl(rawUrl) {
     facts.push("PhishTank тимчасово не відповів; результат за цим джерелом невідомий");
   }
 
+  if (phishDestroy.ok) {
+    if (phishDestroy.threat) {
+      const severityPoints = phishDestroy.severity === "critical" ? 65
+        : phishDestroy.severity === "high" ? 55
+        : phishDestroy.severity === "medium" ? 35
+        : 25;
+      points += severityPoints;
+      reasons.push(`PhishDestroy позначив домен як загрозу (${phishDestroy.severity || "ризик"})`);
+    } else {
+      facts.push("PhishDestroy не знайшов домен у своїх активних списках загроз");
+    }
+  } else {
+    facts.push("PhishDestroy тимчасово не відповів; результат за цим джерелом невідомий");
+  }
+
   const suspiciousHostTokens = [
     "secure-login",
     "verify-account",
@@ -552,7 +611,12 @@ async function inspectUrl(rawUrl) {
       phishTankInDatabase: Boolean(phishTank.inDatabase),
       phishTankVerified: Boolean(phishTank.verified),
       phishTankValid: Boolean(phishTank.valid),
-      phishTankPhishId: phishTank.phishId || null
+      phishTankPhishId: phishTank.phishId || null,
+      phishDestroyOk: Boolean(phishDestroy.ok),
+      phishDestroyThreat: Boolean(phishDestroy.threat),
+      phishDestroyRiskScore: Number(phishDestroy.riskScore || 0),
+      phishDestroySeverity: phishDestroy.severity || null,
+      phishDestroyActive: Boolean(phishDestroy.active)
     }
   };
 }

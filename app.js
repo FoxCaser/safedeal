@@ -178,6 +178,13 @@ $("#runCheck").addEventListener("click", async () => {
             ? "Ліміт запитів"
             : "Тимчасово недоступно";
 
+      const phishDestroyText =
+        t.phishDestroyOk
+          ? (t.phishDestroyThreat
+              ? `Загроза: ${t.phishDestroySeverity || "risk"} (${t.phishDestroyRiskScore || 0}/100)`
+              : "Збігів немає")
+          : "Тимчасово недоступно";
+
       techGrid.innerHTML = `
         <div class="tech-item"><span>🌐 Домен</span><b>${escapeHtml(t.hostname || "—")}</b></div>
         <div class="tech-item"><span>🔒 Протокол</span><b>${escapeHtml(String(t.protocol || "—").toUpperCase())}</b></div>
@@ -185,6 +192,7 @@ $("#runCheck").addEventListener("click", async () => {
         <div class="tech-item"><span>🛰 DNS</span><b>${Array.isArray(t.dns) && t.dns.length ? `${t.dns.length} адрес(и)` : "Не знайдено"}</b></div>
         <div class="tech-item"><span>🛡 Google Web Risk</span><b>${escapeHtml(webRiskText)}</b></div>
         <div class="tech-item"><span>🎣 PhishTank</span><b>${escapeHtml(phishTankText)}</b></div>
+        <div class="tech-item"><span>🧨 PhishDestroy</span><b>${escapeHtml(phishDestroyText)}</b></div>
       `;
 
       factsList.innerHTML = (r.facts || [])
