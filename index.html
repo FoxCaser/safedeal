@@ -7,7 +7,7 @@
   <title>SafeDeal — перевіряй перед дією</title>
   <meta name="description" content="SafeDeal перевіряє продавців, вакансії, посилання, Telegram, Facebook, Instagram, WhatsApp, Viber, OLX, номери телефону та підозрілі повідомлення за доступними сигналами ризику.">
   <meta name="referrer" content="strict-origin-when-cross-origin">
-  <link rel="stylesheet" href="/style.css?v=8.2.1">
+  <link rel="stylesheet" href="/style.css?v=9.0.1">
 </head>
 <body>
   <div class="app-shell">
@@ -145,8 +145,8 @@
         <section class="v9-tools">
           <div class="v9-tool-card"><div><span class="eyebrow">BEFORE PAYMENT</span><h3>Перед оплатою</h3><p>Швидкий чекліст перед переказом грошей.</p></div><button class="secondary-btn" id="prepayOpen" type="button">Відкрити чекліст</button></div>
           <div class="prepay-panel hidden" id="prepayPanel"><label><input type="checkbox" data-risk="1"> Продавець тисне: «плати зараз»</label><label><input type="checkbox" data-risk="1"> Просить перейти в інший месенджер</label><label><input type="checkbox" data-risk="1"> Надіслав стороннє посилання для оплати/доставки</label><label><input type="checkbox" data-risk="1"> Змінив реквізити перед оплатою</label><label><input type="checkbox" data-safe="1"> Є післяплата / безпечний спосіб оплати</label><label><input type="checkbox" data-safe="1"> Контакти та профіль збігаються</label><button class="primary" id="prepayEvaluate" type="button">Оцінити чекліст</button><div class="prepay-result" id="prepayResult"></div></div>
-          <div class="v9-tool-card"><div><span class="eyebrow">ANTI-FAKE PHOTO</span><h3>Антифейк фото</h3><p>Порівняння фото товару з власною історією SafeDeal.</p></div></div>
-          <div class="anti-fake-panel"><input type="file" id="antiFakeFile" accept="image/*"><input class="text-input" id="antiFakeTarget" placeholder="Продавець / оголошення (необов’язково)"><button class="secondary-btn" id="antiFakeRun" type="button">Перевірити фото</button><div id="antiFakeResult" class="anti-fake-result"></div></div>
+          <div class="v9-tool-card"><div><span class="eyebrow">ANTI-FAKE PHOTO</span><h3>Антифейк фото</h3><p>Пошук дубльованих і схожих фото у SafeDeal та відкритих джерелах.</p></div></div>
+          <div class="anti-fake-panel"><input type="file" id="antiFakeFile" accept="image/*"><input class="text-input" id="antiFakeTarget" placeholder="Продавець / оголошення (необов’язково)"><div class="anti-fake-privacy">🌐 Для глобального пошуку стиснена копія вибраного фото надсилається зовнішньому провайдеру reverse-image search. Не завантажуй приватні або чутливі фото.</div><button class="secondary-btn" id="antiFakeRun" type="button">Перевірити фото</button><div id="antiFakeResult" class="anti-fake-result"></div></div>
         </section>
         <div class="v81-result-title">ПРИКЛАД / РЕЗУЛЬТАТ ПЕРЕВІРКИ</div>
         <section class="result-card hidden" id="resultCard">

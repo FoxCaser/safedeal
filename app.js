@@ -1180,5 +1180,66 @@ $("#passportBtn")?.addEventListener("click",async()=>{if(!state.currentReport||!
 $("#closePassport")?.addEventListener("click",()=>closeModal("#passportModal"));$("#passportModal")?.addEventListener("click",e=>{if(e.target.id==="passportModal")closeModal("#passportModal");});
 $("#prepayOpen")?.addEventListener("click",()=>$("#prepayPanel")?.classList.toggle("hidden"));$("#prepayEvaluate")?.addEventListener("click",()=>{const boxes=$$("#prepayPanel input[type=checkbox]"),dangerous=boxes.filter(x=>x.checked&&x.dataset.risk==="1").length,protective=boxes.filter(x=>x.checked&&x.dataset.safe==="1").length,out=$("#prepayResult");if(dangerous>=3)out.innerHTML=`<b>Краще не оплачувати зараз.</b><span>Є кілька сильних ознак ризику.</span>`;else if(dangerous>=1)out.innerHTML=`<b>Продовжуй лише з обережністю.</b><span>Не переказуй гроші, доки ризикові пункти не перевірені.</span>`;else if(protective>=2)out.innerHTML=`<b>Сильних тривожних пунктів у чеклісті немає.</b><span>Це не гарантія безпеки — виконай основну перевірку.</span>`;else out.innerHTML=`<b>Заповни чекліст.</b><span>Познач те, що відповідає ситуації.</span>`;});
 async function computeAHash(file){const bitmap=await createImageBitmap(file),canvas=document.createElement("canvas");canvas.width=8;canvas.height=8;const ctx=canvas.getContext("2d",{willReadFrequently:true});ctx.drawImage(bitmap,0,0,8,8);const data=ctx.getImageData(0,0,8,8).data,vals=[];for(let i=0;i<data.length;i+=4)vals.push(data[i]*.299+data[i+1]*.587+data[i+2]*.114);const avg=vals.reduce((x,y)=>x+y,0)/vals.length;let bits="";vals.forEach(v=>bits+=v>=avg?"1":"0");let hex="";for(let i=0;i<64;i+=4)hex+=parseInt(bits.slice(i,i+4),2).toString(16);return hex;}
-$("#antiFakeRun")?.addEventListener("click",async()=>{const file=$("#antiFakeFile")?.files?.[0],out=$("#antiFakeResult");if(!file){out.textContent="Вибери фото товару або оголошення.";return;}out.textContent="Порівнюємо з історією SafeDeal...";try{const ahash=await computeAHash(file),target=$("#antiFakeTarget")?.value||state.currentInput||"",res=await apiFetch("/api/image-fingerprint",{method:"POST",body:JSON.stringify({ahash,target})}),data=await res.json();if(!data.ok)throw new Error(data.error||"image_check_failed");out.innerHTML=data.exactOrSimilarCount?`<b>Знайдено схожих зображень: ${data.exactOrSimilarCount}</b><div>${data.matches.map(x=>`• ${x.similarity}% схожості — ${escapeHtml(x.target||"інший об’єкт")}`).join("<br>")}</div><small>${escapeHtml(data.note)}</small>`:`<b>Збігів у власній історії SafeDeal не знайдено.</b><small>${escapeHtml(data.note)}</small>`;}catch(e){out.textContent=`Не вдалося перевірити фото: ${e.message}`;}});
+
+function blobToBase64(blob){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(String(r.result||"").split(",")[1]||"");r.onerror=()=>reject(r.error||new Error("file_read_failed"));r.readAsDataURL(blob);});}
+async function prepareImageForInternet(file){
+  const bitmap=await createImageBitmap(file);
+  const maxSide=1200,scale=Math.min(1,maxSide/Math.max(bitmap.width,bitmap.height));
+  let width=Math.max(1,Math.round(bitmap.width*scale)),height=Math.max(1,Math.round(bitmap.height*scale));
+  const canvas=document.createElement("canvas"),ctx=canvas.getContext("2d");
+  let blob=null;
+  for(const quality of [.84,.72,.6,.5]){
+    canvas.width=width;canvas.height=height;ctx.clearRect(0,0,width,height);ctx.drawImage(bitmap,0,0,width,height);
+    blob=await new Promise(r=>canvas.toBlob(r,"image/jpeg",quality));
+    if(blob&&blob.size<=430*1024)break;
+    width=Math.max(320,Math.round(width*.86));height=Math.max(320,Math.round(height*.86));
+  }
+  if(!blob)throw new Error("image_prepare_failed");
+  if(blob.size>500*1024)throw new Error("image_too_large");
+  return {imageBase64:await blobToBase64(blob),mimeType:"image/jpeg",bytes:blob.size};
+}
+function safeHref(value=""){try{const u=new URL(String(value));return ["http:","https:"].includes(u.protocol)?u.href:"";}catch{return "";}}
+function renderInternetImageMatch(item,label){
+  const href=safeHref(item.link||"");
+  return `<div class="internet-image-match"><div><b>${escapeHtml(label)}</b><span>${escapeHtml(item.title||item.source||"Збіг")}</span>${item.source?`<small>${escapeHtml(item.source)}</small>`:""}</div>${href?`<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">Відкрити джерело ↗</a>`:""}</div>`;
+}
+$("#antiFakeRun")?.addEventListener("click",async()=>{
+  const file=$("#antiFakeFile")?.files?.[0],out=$("#antiFakeResult"),btn=$("#antiFakeRun");
+  if(!file){out.textContent="Вибери фото товару або оголошення.";return;}
+  if(file.size>12*1024*1024){out.textContent="Фото завелике. Вибери файл до 12 МБ.";return;}
+  btn.disabled=true;
+  out.innerHTML=`<b>Перевіряємо фото…</b><small>SafeDeal порівнює власну історію та шукає збіги у відкритих джерелах.</small>`;
+  try{
+    const [ahash,prepared]=await Promise.all([computeAHash(file),prepareImageForInternet(file)]);
+    const target=$("#antiFakeTarget")?.value||state.currentInput||"";
+    const res=await apiFetch("/api/image-fingerprint",{method:"POST",body:JSON.stringify({ahash,target,imageBase64:prepared.imageBase64,mimeType:prepared.mimeType})});
+    const data=await res.json();
+    if(!data.ok)throw new Error(data.error||"image_check_failed");
+
+    const local=data.local||{matches:[],exactOrSimilarCount:0};
+    const internet=data.internet||{configured:false,ok:false,exactMatches:[],visualMatches:[]};
+    const exact=internet.exactMatches||[],visual=internet.visualMatches||[];
+    const internetCount=exact.length+visual.length;
+
+    let html=`<div class="anti-fake-summary"><b>Результат перевірки фото</b><span>SafeDeal: ${Number(local.exactOrSimilarCount||0)} · Інтернет: ${internetCount}</span></div>`;
+    html+=local.exactOrSimilarCount
+      ? `<div class="anti-fake-section"><strong>Власна історія SafeDeal</strong>${local.matches.map(x=>`<div class="local-image-match">• ${Number(x.similarity||0)}% схожості — ${escapeHtml(x.target||"інший об’єкт")}</div>`).join("")}</div>`
+      : `<div class="anti-fake-section"><strong>Власна історія SafeDeal</strong><small>Збігів не знайдено.</small></div>`;
+
+    if(!internet.configured){
+      html+=`<div class="anti-fake-section warning"><strong>Пошук по інтернету ще не підключений</strong><small>${escapeHtml(internet.note||"Потрібен ключ провайдера.")}</small></div>`;
+    }else if(!internet.ok){
+      html+=`<div class="anti-fake-section warning"><strong>Інтернет-пошук тимчасово недоступний</strong><small>${escapeHtml(internet.note||"Спробуй ще раз пізніше.")}</small></div>`;
+    }else if(!internetCount){
+      html+=`<div class="anti-fake-section"><strong>Відкриті джерела</strong><small>Точних або візуально схожих збігів не знайдено. Це не гарантує, що фото оригінальне.</small></div>`;
+    }else{
+      html+=`<div class="anti-fake-section"><strong>Збіги у відкритих джерелах</strong>${exact.map(x=>renderInternetImageMatch(x,"Точний збіг")).join("")}${visual.map(x=>renderInternetImageMatch(x,"Схоже фото")).join("")}</div>`;
+    }
+    html+=`<small>${escapeHtml(internet.note||data.note||"")}</small>`;
+    out.innerHTML=html;
+  }catch(e){
+    const map={image_too_large:"Не вдалося стиснути фото до дозволеного розміру.",unsupported_image_type:"Непідтримуваний формат фото.",invalid_image_data:"Помилка підготовки фото."};
+    out.textContent=`Не вдалося перевірити фото: ${map[e.message]||e.message}`;
+  }finally{btn.disabled=false;}
+});
 const recheck=new URLSearchParams(location.search).get("recheck");if(recheck){$("#checkInput").value=recheck;setTimeout(()=>$("#quickCheck")?.scrollIntoView({behavior:"smooth"}),250);}

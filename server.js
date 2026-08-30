@@ -23,10 +23,11 @@ const ABUSECH_AUTH_KEY = process.env.ABUSECH_AUTH_KEY || URLHAUS_AUTH_KEY;
 const DATABASE_URL = process.env.DATABASE_URL || "";
 const ADMIN_KEY = process.env.ADMIN_KEY || "";
 const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
+const SERPAPI_KEY = process.env.SERPAPI_KEY || "";
 const RESEND_FROM = process.env.RESEND_FROM || "SafeDeal <onboarding@resend.dev>";
 const APP_BASE_URL = String(process.env.APP_BASE_URL || "https://safedeal-sqlg.onrender.com").replace(/\/+$/, "");
 const SHOW_DEMO_DATA = String(process.env.SHOW_DEMO_DATA || "false").toLowerCase() === "true";
-const APP_VERSION = "9.0.0";
+const APP_VERSION = "9.0.1";
 
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
@@ -4377,7 +4378,187 @@ app.get("/share/:id",rateLimit({max:180}),async(req,res)=>{if(!databaseReady||!p
 app.get("/report/:id",rateLimit({max:180}),async(req,res)=>{if(!databaseReady||!pool)return res.status(503).send("Database unavailable");const id=String(req.params.id||"");if(!/^[a-f0-9]{16}$/i.test(id))return res.status(400).send("Invalid report id");const {rows}=await pool.query(`SELECT share_id,report,input_preview,created_at FROM shared_checks WHERE share_id=$1 LIMIT 1`,[id]);if(!rows[0])return res.status(404).send("Report not found");res.type("html").send(sharedHtml(rows[0],true));});
 
 app.get("/api/passport",rateLimit({max:120}),async(req,res)=>{if(!databaseReady||!pool)return res.status(503).json({ok:false,error:"database_unavailable"});const type=ALLOWED_TYPES.has(req.query.type)?req.query.type:"seller";const input=String(req.query.input||"").trim();const targetKey=normalizeTargetKey(input);if(!targetKey)return res.status(400).json({ok:false,error:"input_required"});const er=await pool.query(`SELECT entity_kind,entity_value FROM object_entities WHERE target_key=$1 AND type=$2`,[targetKey,type]);const entities=er.rows.map(x=>({kind:x.entity_kind,value:x.entity_value}));const related=await getRelatedObjects(targetKey,type,entities);const [snapshots,complaints,archive]=await Promise.all([pool.query(`SELECT score,label,scheme_key,complaint_count,review_count,created_at FROM target_snapshots WHERE target_key=$1 AND type=$2 ORDER BY created_at DESC LIMIT 50`,[targetKey,type]),pool.query(`SELECT COUNT(*)::int AS count FROM community_reports WHERE target_key=$1 AND status='approved'`,[targetKey]),pool.query(`SELECT COUNT(*)::int AS count FROM review_evidence WHERE target_key=$1 AND status='verified'`,[targetKey])]);const rows=snapshots.rows;res.json({ok:true,passport:{targetKey,type,latest:rows[0]||null,checks:rows.length,approvedComplaints:Number(complaints.rows[0]?.count||0),archivedReviews:Number(archive.rows[0]?.count||0),history:rows.map(x=>({score:x.score,label:x.label,schemeKey:x.scheme_key,createdAt:x.created_at})),related}});});
-app.post("/api/image-fingerprint",rateLimit({max:80}),async(req,res)=>{if(!databaseReady||!pool)return res.status(503).json({ok:false,error:"database_unavailable"});const ahash=String(req.body?.ahash||"").toLowerCase();if(!/^[0-9a-f]{16}$/.test(ahash))return res.status(400).json({ok:false,error:"invalid_hash"});const targetPreview=compactSpaces(req.body?.target||"").slice(0,300);const targetKey=normalizeTargetKey(targetPreview);const {rows}=await pool.query(`SELECT id,ahash,target_key,target_preview,source_label,created_at FROM image_fingerprints ORDER BY created_at DESC LIMIT 1000`);const matches=rows.map(row=>({...row,distance:hammingDistanceHex64(ahash,row.ahash)})).filter(row=>row.distance<=8&&(!targetKey||row.target_key!==targetKey)).sort((x,y)=>x.distance-y.distance).slice(0,20);await pool.query(`INSERT INTO image_fingerprints (ahash,target_key,target_preview) VALUES ($1,$2,$3)`,[ahash,targetKey,targetPreview]);res.json({ok:true,exactOrSimilarCount:matches.length,matches:matches.map(x=>({similarity:Math.max(0,Math.round((1-x.distance/64)*100)),target:x.target_preview,source:x.source_label,createdAt:x.created_at})),note:"Антифейк-фото порівнює зображення з власною історією SafeDeal. Це не глобальний reverse-image search по всьому інтернету."});});
+
+function safeExternalResultUrl(value = "") {
+  try {
+    const u = new URL(String(value || ""));
+    return ["http:", "https:"].includes(u.protocol) ? u.href : "";
+  } catch {
+    return "";
+  }
+}
+
+function normalizeLensItems(items = [], kind = "visual") {
+  if (!Array.isArray(items)) return [];
+  return items.slice(0, 12).map((item) => ({
+    kind,
+    title: compactSpaces(item?.title || item?.source || "Збіг у відкритому джерелі").slice(0, 240),
+    source: compactSpaces(item?.source || "").slice(0, 160),
+    link: safeExternalResultUrl(item?.link || item?.source_link || ""),
+    thumbnail: safeExternalResultUrl(item?.thumbnail || item?.image || ""),
+  })).filter((item) => item.title || item.link);
+}
+
+async function serpApiUploadImage(imageBuffer, mimeType) {
+  if (!SERPAPI_KEY) return { configured: false, ok: false, error: "not_configured" };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const form = new FormData();
+    const ext = mimeType === "image/png" ? "png" : mimeType === "image/webp" ? "webp" : "jpg";
+    form.append("image", new Blob([imageBuffer], { type: mimeType }), `safedeal.${ext}`);
+    form.append("api_key", SERPAPI_KEY);
+    const response = await fetch("https://serpapi.com/image", { method: "POST", body: form, signal: controller.signal });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data?.image_id) {
+      return { configured: true, ok: false, status: response.status, error: data?.error || "image_upload_failed" };
+    }
+    return { configured: true, ok: true, imageId: String(data.image_id) };
+  } catch (error) {
+    return { configured: true, ok: false, error: error?.name === "AbortError" ? "timeout" : (error?.message || "image_upload_failed") };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function serpApiLensSearch(imageId, type) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 18000);
+  try {
+    const params = new URLSearchParams({
+      engine: "google_lens",
+      image_id: imageId,
+      type,
+      safe: "active",
+      hl: "uk",
+      api_key: SERPAPI_KEY
+    });
+    const response = await fetch(`https://serpapi.com/search.json?${params.toString()}`, { signal: controller.signal });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data?.error) {
+      return { ok: false, status: response.status, error: data?.error || "lens_search_failed", data: null };
+    }
+    return { ok: true, status: response.status, data };
+  } catch (error) {
+    return { ok: false, error: error?.name === "AbortError" ? "timeout" : (error?.message || "lens_search_failed"), data: null };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function searchImageOnInternet(imageBuffer, mimeType) {
+  if (!SERPAPI_KEY) {
+    return {
+      configured: false,
+      ok: false,
+      exactMatches: [],
+      visualMatches: [],
+      note: "Глобальний пошук фото не налаштовано: додай SERPAPI_KEY у Render."
+    };
+  }
+
+  const uploaded = await serpApiUploadImage(imageBuffer, mimeType);
+  if (!uploaded.ok) {
+    return {
+      configured: true,
+      ok: false,
+      exactMatches: [],
+      visualMatches: [],
+      error: uploaded.error || "image_upload_failed",
+      note: "Не вдалося передати фото провайдеру глобального пошуку."
+    };
+  }
+
+  const [exact, visual] = await Promise.all([
+    serpApiLensSearch(uploaded.imageId, "exact_matches"),
+    serpApiLensSearch(uploaded.imageId, "visual_matches")
+  ]);
+
+  const exactMatches = normalizeLensItems(exact.data?.exact_matches || [], "exact");
+  const visualMatches = normalizeLensItems(visual.data?.visual_matches || [], "visual");
+
+  return {
+    configured: true,
+    ok: exact.ok || visual.ok,
+    exactMatches,
+    visualMatches,
+    provider: "Google Lens via SerpApi",
+    note: exact.ok || visual.ok
+      ? "Інтернет-пошук перевіряє точні та візуально схожі збіги у відкритих джерелах. Відсутність збігів не гарантує оригінальність фото."
+      : "Провайдер глобального пошуку тимчасово не відповідає.",
+    errors: [exact.ok ? "" : exact.error, visual.ok ? "" : visual.error].filter(Boolean)
+  };
+}
+
+app.post("/api/image-fingerprint", rateLimit({ max: 40 }), async (req, res) => {
+  const ahash = String(req.body?.ahash || "").toLowerCase();
+  if (!/^[0-9a-f]{16}$/.test(ahash)) return res.status(400).json({ ok: false, error: "invalid_hash" });
+
+  const targetPreview = compactSpaces(req.body?.target || "").slice(0, 300);
+  const targetKey = normalizeTargetKey(targetPreview);
+
+  let localMatches = [];
+  if (databaseReady && pool) {
+    try {
+      const { rows } = await pool.query(`SELECT id,ahash,target_key,target_preview,source_label,created_at FROM image_fingerprints ORDER BY created_at DESC LIMIT 1000`);
+      localMatches = rows
+        .map(row => ({ ...row, distance: hammingDistanceHex64(ahash, row.ahash) }))
+        .filter(row => row.distance <= 8 && (!targetKey || row.target_key !== targetKey))
+        .sort((x, y) => x.distance - y.distance)
+        .slice(0, 20);
+      await pool.query(`INSERT INTO image_fingerprints (ahash,target_key,target_preview) VALUES ($1,$2,$3)`, [ahash, targetKey, targetPreview]);
+    } catch (error) {
+      console.error("Image fingerprint DB error:", error.message);
+    }
+  }
+
+  const imageBase64 = String(req.body?.imageBase64 || "");
+  const mimeType = String(req.body?.mimeType || "").toLowerCase();
+  let internet = {
+    configured: Boolean(SERPAPI_KEY),
+    ok: false,
+    exactMatches: [],
+    visualMatches: [],
+    note: SERPAPI_KEY ? "Фото для інтернет-пошуку не передано." : "Глобальний пошук фото не налаштовано: додай SERPAPI_KEY у Render."
+  };
+
+  if (imageBase64) {
+    if (!["image/jpeg", "image/png", "image/webp"].includes(mimeType)) {
+      return res.status(400).json({ ok: false, error: "unsupported_image_type" });
+    }
+    if (!/^[A-Za-z0-9+/=]+$/.test(imageBase64)) {
+      return res.status(400).json({ ok: false, error: "invalid_image_data" });
+    }
+    const imageBuffer = Buffer.from(imageBase64, "base64");
+    if (!imageBuffer.length || imageBuffer.length > 500 * 1024) {
+      return res.status(413).json({ ok: false, error: "image_too_large" });
+    }
+    internet = await searchImageOnInternet(imageBuffer, mimeType);
+  }
+
+  res.json({
+    ok: true,
+    local: {
+      exactOrSimilarCount: localMatches.length,
+      matches: localMatches.map(x => ({
+        similarity: Math.max(0, Math.round((1 - x.distance / 64) * 100)),
+        target: x.target_preview,
+        source: x.source_label,
+        createdAt: x.created_at
+      })),
+      databaseAvailable: Boolean(databaseReady && pool)
+    },
+    internet,
+    exactOrSimilarCount: localMatches.length,
+    matches: localMatches.map(x => ({
+      similarity: Math.max(0, Math.round((1 - x.distance / 64) * 100)),
+      target: x.target_preview,
+      source: x.source_label,
+      createdAt: x.created_at
+    })),
+    note: "SafeDeal поєднує власну історію з глобальним reverse-image search, якщо SERPAPI_KEY налаштовано."
+  });
+});
 
 app.post("/api/check", rateLimit({ max: 80 }), async (req, res) => {
   const { type = "seller", input = "", historyPreview = "" } = req.body || {};

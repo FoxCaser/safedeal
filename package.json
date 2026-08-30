@@ -1,8 +1,8 @@
 {
   "name": "safedeal",
-  "version": "9.0.0",
+  "version": "9.0.1",
   "private": true,
-  "description": "SafeDeal 9.0 — evidence-first anti-fraud checks, snapshots, watch, passport, sharing, reports and pre-payment tools.",
+  "description": "SafeDeal 9.0.1 — anti-fraud checks with global anti-fake image search.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
