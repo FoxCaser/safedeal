@@ -1199,10 +1199,59 @@ async function prepareImageForInternet(file){
   return {imageBase64:await blobToBase64(blob),mimeType:"image/jpeg",bytes:blob.size};
 }
 function safeHref(value=""){try{const u=new URL(String(value));return ["http:","https:"].includes(u.protocol)?u.href:"";}catch{return "";}}
+function imageResultDomain(item={}){
+  try{return new URL(item.link||"").hostname.toLowerCase().replace(/^www\./,"");}catch{return String(item.source||"").toLowerCase();}
+}
+function classifyImageSource(item={}){
+  const host=imageResultDomain(item),text=`${item.title||""} ${item.source||""} ${host}`.toLowerCase();
+  const marketplace=["rozetka.","prom.ua","epicentrk.ua","allo.ua","foxtrot.com.ua","comfy.ua","moyo.ua","stylus.ua","amazon.","ebay.","etsy.","aliexpress.","wildberries.","papita.","hotline.ua","kasta.ua"];
+  const classifieds=["olx.","shafa.ua","ria.com","izi.ua","facebook.com/marketplace","kabanchik.ua"];
+  if(marketplace.some(x=>host.includes(x)||text.includes(x)))return "catalog";
+  if(classifieds.some(x=>host.includes(x)||text.includes(x)))return "listing";
+  if(/shop|store|product|товар|купити|ціна|price|catalog|каталог/.test(text))return "catalog";
+  if(/оголош|продав|seller|marketplace|used|б\/у|second hand/.test(text))return "listing";
+  return "other";
+}
 function renderInternetImageMatch(item,label){
   const href=safeHref(item.link||"");
   return `<div class="internet-image-match"><div><b>${escapeHtml(label)}</b><span>${escapeHtml(item.title||item.source||"Збіг")}</span>${item.source?`<small>${escapeHtml(item.source)}</small>`:""}</div>${href?`<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">Відкрити джерело ↗</a>`:""}</div>`;
 }
+function antiFakeHumanSummary(exact=[],visual=[]){
+  const all=[...exact,...visual];
+  const groups={catalog:[],listing:[],other:[]};
+  all.forEach(x=>groups[classifyImageSource(x)].push(x));
+  const manyCatalog=groups.catalog.length>=3 || exact.length>=8;
+  const manyListings=groups.listing.length>=3;
+  let title="Збіги в інтернеті знайдено";
+  let tone="info";
+  let text="Це фото вже зустрічається на інших сторінках. Сам по собі такий збіг не означає шахрайство.";
+  if(manyCatalog && !manyListings){
+    title="Схоже на каталожне фото товару";
+    tone="ok";
+    text="Фото часто зустрічається на магазинах або товарних сторінках. Для офіційного фото виробника чи магазину це нормально. Якщо приватний продавець називає його власним фото товару — попроси реальні фото саме його товару.";
+  }else if(manyListings){
+    title="Фото використовують різні продавці";
+    tone="warn";
+    text="Ми знайшли це або дуже схоже фото в кількох оголошеннях/продавців. Це не доводить шахрайство, але варто попросити продавця зробити нове фото товару з папірцем, датою або іншим унікальним підтвердженням.";
+  }else if(exact.length){
+    title="Фото вже публікувалося в інтернеті";
+    tone="warn";
+    text="Є точні збіги цього фото в інших відкритих джерелах. Перевір, чи продавець не видає чуже або каталожне фото за власне.";
+  }
+  return {groups,title,tone,text};
+}
+function renderSourceGroup(title,items=[]){
+  if(!items.length)return "";
+  const first=items.slice(0,5),rest=items.slice(5);
+  const block=first.map(x=>renderInternetImageMatch(x,x.kind==="exact"?"Точний збіг":"Схоже фото")).join("");
+  const hidden=rest.length?`<div class="anti-fake-more hidden">${rest.map(x=>renderInternetImageMatch(x,x.kind==="exact"?"Точний збіг":"Схоже фото")).join("")}</div><button class="anti-fake-show-more" type="button">Показати ще ${rest.length}</button>`:"";
+  return `<div class="anti-fake-source-group"><div class="anti-fake-group-head"><strong>${escapeHtml(title)}</strong><span>${items.length}</span></div>${block}${hidden}</div>`;
+}
+$("#antiFakeResult")?.addEventListener("click",e=>{
+  const btn=e.target.closest(".anti-fake-show-more");if(!btn)return;
+  const more=btn.previousElementSibling;if(!more)return;
+  const opening=more.classList.contains("hidden");more.classList.toggle("hidden",!opening);btn.textContent=opening?"Сховати додаткові джерела":`Показати ще ${more.children.length}`;
+});
 $("#antiFakeRun")?.addEventListener("click",async()=>{
   const file=$("#antiFakeFile")?.files?.[0],out=$("#antiFakeResult"),btn=$("#antiFakeRun");
   if(!file){out.textContent="Вибери фото товару або оголошення.";return;}
@@ -1218,24 +1267,27 @@ $("#antiFakeRun")?.addEventListener("click",async()=>{
 
     const local=data.local||{matches:[],exactOrSimilarCount:0};
     const internet=data.internet||{configured:false,ok:false,exactMatches:[],visualMatches:[]};
-    const exact=internet.exactMatches||[],visual=internet.visualMatches||[];
+    const exact=(internet.exactMatches||[]).map(x=>({...x,kind:"exact"})),visual=(internet.visualMatches||[]).map(x=>({...x,kind:"visual"}));
     const internetCount=exact.length+visual.length;
 
     let html=`<div class="anti-fake-summary"><b>Результат перевірки фото</b><span>SafeDeal: ${Number(local.exactOrSimilarCount||0)} · Інтернет: ${internetCount}</span></div>`;
-    html+=local.exactOrSimilarCount
-      ? `<div class="anti-fake-section"><strong>Власна історія SafeDeal</strong>${local.matches.map(x=>`<div class="local-image-match">• ${Number(x.similarity||0)}% схожості — ${escapeHtml(x.target||"інший об’єкт")}</div>`).join("")}</div>`
-      : `<div class="anti-fake-section"><strong>Власна історія SafeDeal</strong><small>Збігів не знайдено.</small></div>`;
-
-    if(!internet.configured){
+    if(internet.ok&&internetCount){
+      const summary=antiFakeHumanSummary(exact,visual),g=summary.groups;
+      html+=`<div class="anti-fake-verdict ${summary.tone}"><span>ПРОСТИМИ СЛОВАМИ</span><b>${escapeHtml(summary.title)}</b><p>${escapeHtml(summary.text)}</p></div>`;
+      html+=`<div class="anti-fake-meaning"><strong>Що означають ці посилання?</strong><p>Це сторінки, де Google Lens побачив те саме або схоже фото. Вони показані як джерела для перевірки — не як список шахраїв.</p></div>`;
+      html+=`<div class="anti-fake-categories"><div><b>${g.catalog.length}</b><span>магазини / каталоги</span></div><div><b>${g.listing.length}</b><span>інші оголошення</span></div><div><b>${g.other.length}</b><span>інші сайти</span></div></div>`;
+      html+=renderSourceGroup("Магазини / каталоги",g.catalog)+renderSourceGroup("Інші оголошення продавців",g.listing)+renderSourceGroup("Інші сайти",g.other);
+    }else if(!internet.configured){
       html+=`<div class="anti-fake-section warning"><strong>Пошук по інтернету ще не підключений</strong><small>${escapeHtml(internet.note||"Потрібен ключ провайдера.")}</small></div>`;
     }else if(!internet.ok){
       html+=`<div class="anti-fake-section warning"><strong>Інтернет-пошук тимчасово недоступний</strong><small>${escapeHtml(internet.note||"Спробуй ще раз пізніше.")}</small></div>`;
-    }else if(!internetCount){
-      html+=`<div class="anti-fake-section"><strong>Відкриті джерела</strong><small>Точних або візуально схожих збігів не знайдено. Це не гарантує, що фото оригінальне.</small></div>`;
     }else{
-      html+=`<div class="anti-fake-section"><strong>Збіги у відкритих джерелах</strong>${exact.map(x=>renderInternetImageMatch(x,"Точний збіг")).join("")}${visual.map(x=>renderInternetImageMatch(x,"Схоже фото")).join("")}</div>`;
+      html+=`<div class="anti-fake-verdict ok"><span>ПРОСТИМИ СЛОВАМИ</span><b>Помітних збігів у відкритих джерелах не знайдено</b><p>Це не доводить, що фото зробив саме цей продавець. Якщо угода дорога — все одно попроси додаткове реальне фото товару.</p></div>`;
     }
-    html+=`<small>${escapeHtml(internet.note||data.note||"")}</small>`;
+    html+=local.exactOrSimilarCount
+      ? `<div class="anti-fake-section"><strong>Власна історія SafeDeal</strong>${local.matches.map(x=>`<div class="local-image-match">• ${Number(x.similarity||0)}% схожості — ${escapeHtml(x.target||"інший об’єкт")}</div>`).join("")}</div>`
+      : `<div class="anti-fake-section"><strong>Власна історія SafeDeal</strong><small>Збігів не знайдено.</small></div>`;
+    html+=`<div class="anti-fake-next"><strong>Що робити далі</strong><span>Попроси продавця зробити нове фото товару з папірцем, датою або твоїм ім’ям.</span><span>Звір номер, профіль та відгуки продавця в SafeDeal.</span><span>Не роби передоплату лише тому, що фото виглядає справжнім.</span></div>`;
     out.innerHTML=html;
   }catch(e){
     const map={image_too_large:"Не вдалося стиснути фото до дозволеного розміру.",unsupported_image_type:"Непідтримуваний формат фото.",invalid_image_data:"Помилка підготовки фото."};
