@@ -1,8 +1,8 @@
 {
   "name": "safedeal",
-  "version": "7.0.0",
+  "version": "9.0.0",
   "private": true,
-  "description": "SafeDeal launch candidate — anti-fraud checks, moderated reports, accounts, OCR and appeals.",
+  "description": "SafeDeal 9.0 — evidence-first anti-fraud checks, snapshots, watch, passport, sharing, reports and pre-payment tools.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

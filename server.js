@@ -26,7 +26,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
 const RESEND_FROM = process.env.RESEND_FROM || "SafeDeal <onboarding@resend.dev>";
 const APP_BASE_URL = String(process.env.APP_BASE_URL || "https://safedeal-sqlg.onrender.com").replace(/\/+$/, "");
 const SHOW_DEMO_DATA = String(process.env.SHOW_DEMO_DATA || "false").toLowerCase() === "true";
-const APP_VERSION = "8.2.4";
+const APP_VERSION = "9.0.0";
 
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
@@ -238,6 +238,87 @@ async function initDatabase() {
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_review_evidence_target ON review_evidence(target_key, status, created_at DESC)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_review_evidence_platform ON review_evidence(platform, status, created_at DESC)`);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS target_snapshots (
+        id BIGSERIAL PRIMARY KEY,
+        target_key TEXT NOT NULL,
+        type TEXT NOT NULL,
+        score INTEGER NOT NULL DEFAULT 0,
+        label TEXT NOT NULL DEFAULT '',
+        scheme_key TEXT NOT NULL DEFAULT '',
+        complaint_count INTEGER NOT NULL DEFAULT 0,
+        review_count INTEGER NOT NULL DEFAULT 0,
+        snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_target_snapshots_target ON target_snapshots(target_key, type, created_at DESC)`);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS object_entities (
+        id BIGSERIAL PRIMARY KEY,
+        target_key TEXT NOT NULL,
+        type TEXT NOT NULL,
+        entity_kind TEXT NOT NULL,
+        entity_value TEXT NOT NULL,
+        first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(target_key, type, entity_kind, entity_value)
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_object_entities_value ON object_entities(entity_kind, entity_value, last_seen_at DESC)`);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS watch_items (
+        id BIGSERIAL PRIMARY KEY,
+        owner_key TEXT NOT NULL,
+        target_key TEXT NOT NULL,
+        type TEXT NOT NULL,
+        target_preview TEXT NOT NULL DEFAULT '',
+        active BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(owner_key, target_key, type)
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_watch_items_owner ON watch_items(owner_key, active, updated_at DESC)`);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS watch_events (
+        id BIGSERIAL PRIMARY KEY,
+        owner_key TEXT NOT NULL,
+        target_key TEXT NOT NULL,
+        type TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        message TEXT NOT NULL,
+        before_score INTEGER,
+        after_score INTEGER,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_watch_events_owner ON watch_events(owner_key, created_at DESC)`);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS shared_checks (
+        share_id TEXT PRIMARY KEY,
+        report JSONB NOT NULL,
+        input_preview TEXT NOT NULL DEFAULT '',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS image_fingerprints (
+        id BIGSERIAL PRIMARY KEY,
+        ahash TEXT NOT NULL,
+        target_key TEXT NOT NULL DEFAULT '',
+        target_preview TEXT NOT NULL DEFAULT '',
+        source_label TEXT NOT NULL DEFAULT 'SafeDeal user check',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_image_fingerprints_hash ON image_fingerprints(ahash, created_at DESC)`);
 
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_check_history_client_created ON check_history(client_id, created_at DESC)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_check_history_user_created ON check_history(user_id, created_at DESC)`);
@@ -839,9 +920,10 @@ function analyzeDomainSpoof(rawUrl, parsed) {
 }
 
 function scoreToLevel(score) {
-  if (score >= 76) return { level: "very-high", label: "Дуже високий ризик" };
+  if (score >= 76) return { level: "very-high", label: "Критичний ризик" };
   if (score >= 51) return { level: "high", label: "Високий ризик" };
-  if (score >= 26) return { level: "medium", label: "Середній ризик" };
+  if (score >= 26) return { level: "medium", label: "Підвищений ризик" };
+  if (score <= 10) return { level: "low", label: "Дуже низький ризик" };
   return { level: "low", label: "Низький ризик" };
 }
 
@@ -3083,6 +3165,116 @@ function buildPlainLanguageSummary({ score, type, reasons = [], technical = null
 }
 
 
+
+function classifyScamScheme({ type, score, reasons = [], technical = null }) {
+  const text = reasons.join(" ").toLowerCase();
+  const schemes = [
+    { key: "fake_job", label: "Фейкова вакансія / платні завдання", re: /ваканс|депозит|активац|платними завданнями|викуп товар|початку роботи/ },
+    { key: "phishing", label: "Фішинг / викрадення даних", re: /фіш|блокування|підтвердити|оновити.*дан|парол|sms|otp|підміна|маскуватися/ },
+    { key: "fake_delivery", label: "Фейкова доставка", re: /достав|адрес.*підтверд|посилання.*підтверд/ },
+    { key: "advance_payment", label: "Шахрайство з передоплатою", re: /передоплат|депозит|переказ.*грош|оплат/ },
+    { key: "fake_shop", label: "Підроблений магазин / сайт", re: /бренд|домен.*не належить|підроб|маскується|схоже на.*сайт/ },
+    { key: "account_takeover", label: "Спроба викрадення акаунта", re: /акаунт.*заблок|одноразов.*код|otp|парол/ },
+    { key: "malware", label: "Шкідливе ПЗ / небезпечне завантаження", re: /malware|шкідлив|apk|exe|seed|private key/ }
+  ];
+  const found = schemes.find((x) => x.re.test(text));
+  if (found) return { ...found, confidence: score >= 70 ? "high" : score >= 40 ? "medium" : "low" };
+  if (score <= 10) return { key: "none_detected", label: "Типову шахрайську схему не виявлено", confidence: "medium" };
+  return { key: "mixed_risk", label: "Змішані ознаки ризику", confidence: score >= 60 ? "medium" : "low" };
+}
+
+function confidenceForEvidence(text = "", kind = "signal") {
+  const t = String(text).toLowerCase();
+  if (/модерован|точний.*збіг|urlhaus.*точн|threatfox.*точн|web risk.*збіг|підтверджен.*архів|старий знімок|той самий номер/.test(t)) return "high";
+  if (/tls|https|dns|rdap|домен|редирект|форма|публічн|відгук/.test(t)) return "medium";
+  if (kind === "positive") return "medium";
+  return "low";
+}
+
+function buildEvidenceBundle({ score, reasons = [], facts = [], technical = null, moderatedMatches = [], reviewArchive = null }) {
+  const items = [];
+  const seen = new Set();
+  const push = (kind, title, detail, source = "SafeDeal analysis", confidence = null) => {
+    const key = `${kind}|${title}|${detail}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    items.push({ kind, title: String(title || "").slice(0,160), detail: String(detail || "").slice(0,700), source, confidence: confidence || confidenceForEvidence(`${title} ${detail}`, kind) });
+  };
+  reasons.forEach((reason) => push("risk", "Сигнал ризику", reason));
+  moderatedMatches.slice(0,20).forEach((item) => push("confirmed", `Модерована скарга ${item.code || ""}`.trim(), item.reason || item.details || "Є підтверджений запис у базі скарг SafeDeal.", "SafeDeal moderated reports", "high"));
+  (reviewArchive?.items || []).slice(0,30).forEach((item) => push("confirmed", "Архівний відгук / знімок", item.summary || item.archivedText || "Є збережений архівний доказ.", item.sourceUrl || "SafeDeal archive", "high"));
+  if (technical) {
+    if (technical.tlsAuthorized === true) push("positive","TLS/HTTPS перевірено","Сертифікат сторінки пройшов перевірку.","TLS scan","medium");
+    if (technical.webRiskOk && Number(technical.webRiskMatches||0)===0) push("positive","Google Web Risk","Відомих збігів загроз не знайдено.","Google Web Risk","high");
+    if (technical.phishTankOk && !technical.phishTankInDatabase) push("positive","PhishTank","Збігів у доступній базі не знайдено.","PhishTank","medium");
+    if (technical.urlHausOk && !technical.urlHausMatch && !technical.urlHausHostMatch) push("positive","URLhaus","Точного malware-збігу не знайдено.","URLhaus","high");
+    if (technical.threatFoxOk && !technical.threatFoxMatch) push("positive","ThreatFox","Активного IOC-збігу не знайдено.","ThreatFox","high");
+    if (technical.pageScanOk && !technical.pageBrandMismatch && !technical.httpsDowngrade) push("positive","Перевірка сторінки","Не виявлено підміни бренду або downgrade HTTPS→HTTP.","Safe page scan","medium");
+  }
+  if (score <= 10 && !moderatedMatches.length) push("positive","Скарги SafeDeal","Підтверджених збігів у модерованій базі скарг не знайдено.","SafeDeal moderated reports","high");
+  facts.slice(0,20).forEach((fact) => {
+    if (/не знайдено|офіційн|дійсн|пройшов перевірку|не має прямого доступу/i.test(fact)) push("context","Контекст перевірки",fact,"SafeDeal analysis","medium");
+  });
+  return {
+    total: items.length, confirmed: items.filter(x=>x.kind==="confirmed").length, risk: items.filter(x=>x.kind==="risk").length, positive: items.filter(x=>x.kind==="positive").length, items,
+    note: score <= 10 ? "Низький ризик означає, що значних ознак небезпеки не знайдено в доступних даних. Це не гарантія повної безпеки." : "SafeDeal розділяє підтверджені докази, технічні сигнали та слабші індикатори. Це оцінка ризику, а не юридичний висновок."
+  };
+}
+
+function extractObjectEntities(type, input, report = {}) {
+  const text = String(input || ""); const entities=[]; const add=(kind,value)=>{const v=compactSpaces(value||"").toLowerCase(); if(v && v.length<=300 && !entities.some(x=>x.kind===kind&&x.value===v)) entities.push({kind,value:v});};
+  for (const m of text.matchAll(/(?:\+?\d[\d\s().-]{7,}\d)/g)) { const p=extractPhoneTarget(m[0]); if(p?.valid) add("phone",p.digits); }
+  for (const m of text.matchAll(/https?:\/\/[^\s<>"']+/gi)) { try { const u=new URL(m[0]); add("domain",u.hostname.toLowerCase().replace(/^www\./,"")); add("url",`${u.hostname.toLowerCase().replace(/^www\./,"")}${u.pathname}`.replace(/\/+$/,"")); } catch {} }
+  for (const m of text.matchAll(/(?:^|\s)@([a-zA-Z0-9_]{4,32})\b/g)) add("username",`@${m[1].toLowerCase()}`);
+  for (const m of text.matchAll(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi)) add("email",m[0].toLowerCase());
+  if(report?.phone?.normalized) add("phone",String(report.phone.normalized).replace(/\D/g,""));
+  if(report?.telegram?.username) add("telegram",`@${String(report.telegram.username).toLowerCase()}`);
+  if(report?.technical?.hostname) add("domain",String(report.technical.hostname).toLowerCase().replace(/^www\./,""));
+  return entities.slice(0,50);
+}
+
+async function getOwnerKey(req) {
+  const user = await getAuthUser(req); if(user?.id) return `user:${user.id}`; const clientId=getClientId(req); return clientId?`client:${clientId}`:"";
+}
+async function getRelatedObjects(targetKey,type,entities=[]) {
+  if(!databaseReady||!pool||!targetKey||!entities.length) return [];
+  const values=entities.map(x=>`${x.kind}:${x.value}`);
+  try {
+    const {rows}=await pool.query(`SELECT DISTINCT e2.target_key,e2.type,e1.entity_kind,e1.entity_value,MAX(e2.last_seen_at) OVER (PARTITION BY e2.target_key,e2.type) AS last_seen_at FROM object_entities e1 JOIN object_entities e2 ON e1.entity_kind=e2.entity_kind AND e1.entity_value=e2.entity_value WHERE (e1.entity_kind||':'||e1.entity_value)=ANY($1::text[]) AND NOT (e2.target_key=$2 AND e2.type=$3) ORDER BY last_seen_at DESC LIMIT 30`,[values,targetKey,type]);
+    return rows.map(row=>({targetKey:row.target_key,type:row.type,matchedBy:row.entity_kind,matchedValue:row.entity_value,confidence:row.entity_kind==="phone"?"high":["email","telegram"].includes(row.entity_kind)?"high":"medium",note:row.entity_kind==="phone"?"Пов’язано однаковим номером телефону. Це сильний зв’язок, але не доводить, що профілями керує одна й та сама людина.":`Пов’язано за ознакою: ${row.entity_kind}. Це сигнал зв’язку, а не доказ тотожності власника.`}));
+  } catch(error){console.error("Related objects lookup failed:",error.message); return [];}
+}
+async function persistEntities(targetKey,type,entities=[]) {
+  if(!databaseReady||!pool||!targetKey) return;
+  for(const item of entities){try{await pool.query(`INSERT INTO object_entities (target_key,type,entity_kind,entity_value) VALUES ($1,$2,$3,$4) ON CONFLICT (target_key,type,entity_kind,entity_value) DO UPDATE SET last_seen_at=NOW()`,[targetKey,type,item.kind,item.value]);}catch(error){console.error("Entity persist failed:",error.message);}}
+}
+function snapshotDiff(previous,current) {
+  if(!previous) return {firstCheck:true,changed:false,items:[],scoreDelta:0};
+  const items=[]; const delta=Number(current.score||0)-Number(previous.score||0);
+  if(Math.abs(delta)>=5) items.push(`Ризик змінився: ${previous.score}/100 → ${current.score}/100`);
+  if(Number(current.complaintCount||0)!==Number(previous.complaintCount||0)) items.push(`Кількість підтверджених скарг: ${previous.complaintCount||0} → ${current.complaintCount||0}`);
+  if(Number(current.reviewCount||0)!==Number(previous.reviewCount||0)) items.push(`Архівних/підтверджених відгуків: ${previous.reviewCount||0} → ${current.reviewCount||0}`);
+  if(String(current.schemeKey||"")!==String(previous.schemeKey||"")&&previous.schemeKey) items.push("Змінився тип найбільш ймовірної ризикової схеми.");
+  return {firstCheck:false,changed:items.length>0,items,scoreDelta:delta};
+}
+async function saveTargetSnapshot({targetKey,type,report,input}) {
+  if(!databaseReady||!pool||!targetKey) return {firstCheck:true,changed:false,items:[],scoreDelta:0};
+  try{
+    const prev=await pool.query(`SELECT score,scheme_key,complaint_count,review_count,created_at FROM target_snapshots WHERE target_key=$1 AND type=$2 ORDER BY created_at DESC LIMIT 1`,[targetKey,type]);
+    const row=prev.rows[0]; const previous=row?{score:Number(row.score||0),schemeKey:row.scheme_key||"",complaintCount:Number(row.complaint_count||0),reviewCount:Number(row.review_count||0),createdAt:row.created_at}:null;
+    const current={score:Number(report.score||0),schemeKey:report.scamScheme?.key||"",complaintCount:Number(report.communityMatches?.length||0),reviewCount:Number(report.reviewArchive?.confirmedCount||0)};
+    const diff=snapshotDiff(previous,current);
+    await pool.query(`INSERT INTO target_snapshots (target_key,type,score,label,scheme_key,complaint_count,review_count,snapshot) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,[targetKey,type,current.score,report.label||"",current.schemeKey,current.complaintCount,current.reviewCount,JSON.stringify({targetPreview:compactSpaces(input).slice(0,500),reasons:report.reasons||[],facts:report.facts||[],scheme:report.scamScheme||null,technical:report.technical||null})]);
+    return {...diff,previousAt:previous?.createdAt||null};
+  }catch(error){console.error("Snapshot save failed:",error.message); return {firstCheck:true,changed:false,items:[],scoreDelta:0};}
+}
+async function createWatchEventIfNeeded(ownerKey,targetKey,type,changes,score) {
+  if(!databaseReady||!pool||!ownerKey||!targetKey||!changes?.changed) return false;
+  try{const watched=await pool.query(`SELECT 1 FROM watch_items WHERE owner_key=$1 AND target_key=$2 AND type=$3 AND active=TRUE LIMIT 1`,[ownerKey,targetKey,type]); if(!watched.rowCount) return false; const before=Number(score||0)-Number(changes.scoreDelta||0); await pool.query(`INSERT INTO watch_events (owner_key,target_key,type,event_type,message,before_score,after_score) VALUES ($1,$2,$3,'change',$4,$5,$6)`,[ownerKey,targetKey,type,changes.items.join(" • ").slice(0,1000),before,Number(score||0)]); return true;}catch(error){console.error("Watch event create failed:",error.message); return false;}
+}
+function hammingDistanceHex64(a,b){const x=String(a||"").toLowerCase(),y=String(b||"").toLowerCase(); if(!/^[0-9a-f]{16}$/.test(x)||!/^[0-9a-f]{16}$/.test(y))return 64;let d=0;for(let i=0;i<16;i++){let n=parseInt(x[i],16)^parseInt(y[i],16);while(n){d+=n&1;n>>=1;}}return d;}
+
+
 async function analyzeInput(type, input) {
   const safeType = ALLOWED_TYPES.has(type) ? type : "seller";
   const textAnalysis = analyzeTextSignals(safeType, input);
@@ -3237,6 +3429,9 @@ async function analyzeInput(type, input) {
     reviewArchive
   });
 
+  const scamScheme = classifyScamScheme({ type: safeType, score, reasons, technical });
+  const evidence = buildEvidenceBundle({ score, reasons, facts, technical, moderatedMatches, reviewArchive });
+
   if (!reasons.length) {
     reasons.push(
       "Не знайдено явних типових сигналів ризику, але це не гарантує безпечність"
@@ -3251,6 +3446,8 @@ async function analyzeInput(type, input) {
     label,
     verdict,
     plainSummary,
+    scamScheme,
+    evidence,
     reviewArchive,
     reasons: [...new Set(reasons)],
     facts: [...new Set(facts)],
@@ -4035,6 +4232,120 @@ app.patch("/api/admin/reports/:code", requireAdmin, rateLimit({ max: 240 }), asy
   }
 });
 
+
+
+const ADMIN_REVIEW_EVIDENCE_PLATFORMS = new Set(["seller", "contact", "facebook", "instagram", "whatsapp", "viber", "olx"]);
+
+app.get("/api/admin/review-evidence", requireAdmin, rateLimit({ max: 240 }), async (req, res) => {
+  if (!databaseReady || !pool) {
+    return res.status(503).json({ ok: false, error: "database_unavailable" });
+  }
+
+  const rawTarget = compactSpaces(req.query.target || "").slice(0, 500);
+  const targetKey = rawTarget ? normalizeTargetKey(rawTarget) : "";
+
+  try {
+    const params = [];
+    let where = "";
+    if (targetKey) {
+      params.push(targetKey);
+      where = "WHERE target_key = $1";
+    }
+
+    const { rows } = await pool.query(
+      `SELECT id, target_key, platform, source_url, archived_text, summary,
+              evidence_type, first_seen_at, missing_at, status, created_at
+       FROM review_evidence
+       ${where}
+       ORDER BY created_at DESC
+       LIMIT 200`,
+      params
+    );
+
+    res.json({ ok: true, items: rows, targetKey });
+  } catch (error) {
+    console.error("Admin review evidence load error:", error);
+    res.status(500).json({ ok: false, error: "admin_review_evidence_failed" });
+  }
+});
+
+app.post("/api/admin/review-evidence", requireAdmin, rateLimit({ max: 120 }), async (req, res) => {
+  if (!databaseReady || !pool) {
+    return res.status(503).json({ ok: false, error: "database_unavailable" });
+  }
+
+  const rawTarget = compactSpaces(req.body?.target || "").slice(0, 500);
+  const targetKey = normalizeTargetKey(rawTarget);
+  const platform = String(req.body?.platform || "seller").toLowerCase();
+  const sourceUrl = compactSpaces(req.body?.sourceUrl || "").slice(0, 1500);
+  const archivedText = compactSpaces(req.body?.archivedText || "").slice(0, 5000);
+  const summary = compactSpaces(req.body?.summary || "").slice(0, 1200);
+  const evidenceType = compactSpaces(req.body?.evidenceType || "manual_archive").slice(0, 80) || "manual_archive";
+  const firstSeenAt = req.body?.firstSeenAt ? new Date(req.body.firstSeenAt) : null;
+  const missingAt = req.body?.missingAt ? new Date(req.body.missingAt) : null;
+
+  if (!rawTarget || !targetKey) {
+    return res.status(400).json({ ok: false, error: "target_required" });
+  }
+  if (!ADMIN_REVIEW_EVIDENCE_PLATFORMS.has(platform)) {
+    return res.status(400).json({ ok: false, error: "invalid_platform" });
+  }
+  if (!archivedText && !summary) {
+    return res.status(400).json({ ok: false, error: "review_text_required" });
+  }
+  if (firstSeenAt && Number.isNaN(firstSeenAt.getTime())) {
+    return res.status(400).json({ ok: false, error: "invalid_first_seen_at" });
+  }
+  if (missingAt && Number.isNaN(missingAt.getTime())) {
+    return res.status(400).json({ ok: false, error: "invalid_missing_at" });
+  }
+
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO review_evidence
+        (target_key, platform, source_url, archived_text, summary, evidence_type,
+         first_seen_at, missing_at, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'verified')
+       RETURNING id, target_key, platform, source_url, archived_text, summary,
+                 evidence_type, first_seen_at, missing_at, status, created_at`,
+      [
+        targetKey,
+        platform,
+        sourceUrl,
+        archivedText,
+        summary || archivedText.slice(0, 500),
+        evidenceType,
+        firstSeenAt,
+        missingAt
+      ]
+    );
+    res.status(201).json({ ok: true, item: rows[0] });
+  } catch (error) {
+    console.error("Admin review evidence create error:", error);
+    res.status(500).json({ ok: false, error: "admin_review_evidence_create_failed" });
+  }
+});
+
+app.delete("/api/admin/review-evidence/:id", requireAdmin, rateLimit({ max: 120 }), async (req, res) => {
+  if (!databaseReady || !pool) {
+    return res.status(503).json({ ok: false, error: "database_unavailable" });
+  }
+
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ ok: false, error: "invalid_id" });
+  }
+
+  try {
+    const result = await pool.query(`DELETE FROM review_evidence WHERE id = $1`, [id]);
+    if (!result.rowCount) return res.status(404).json({ ok: false, error: "not_found" });
+    res.json({ ok: true, deleted: 1 });
+  } catch (error) {
+    console.error("Admin review evidence delete error:", error);
+    res.status(500).json({ ok: false, error: "admin_review_evidence_delete_failed" });
+  }
+});
+
 app.get("/privacy", (req, res) => {
   res.sendFile(path.join(__dirname, "privacy.html"));
 });
@@ -4053,34 +4364,49 @@ app.get("/admin", (req, res) => {
   res.sendFile(path.join(__dirname, "admin.html"));
 });
 
+
+app.post("/api/watch", rateLimit({ max: 60 }), async (req,res)=>{if(!databaseReady||!pool)return res.status(503).json({ok:false,error:"database_unavailable"});const type=ALLOWED_TYPES.has(req.body?.type)?req.body.type:"seller";const input=String(req.body?.input||"").trim();if(!input)return res.status(400).json({ok:false,error:"input_required"});const ownerKey=await getOwnerKey(req);if(!ownerKey)return res.status(400).json({ok:false,error:"client_required"});const targetKey=normalizeTargetKey(input);await pool.query(`INSERT INTO watch_items (owner_key,target_key,type,target_preview,active,updated_at) VALUES ($1,$2,$3,$4,TRUE,NOW()) ON CONFLICT (owner_key,target_key,type) DO UPDATE SET target_preview=EXCLUDED.target_preview,active=TRUE,updated_at=NOW()`,[ownerKey,targetKey,type,compactSpaces(input).slice(0,300)]);res.json({ok:true,watching:true,targetKey});});
+app.delete("/api/watch", rateLimit({ max:60 }), async(req,res)=>{if(!databaseReady||!pool)return res.status(503).json({ok:false,error:"database_unavailable"});const ownerKey=await getOwnerKey(req);const type=ALLOWED_TYPES.has(req.body?.type)?req.body.type:"seller";const targetKey=normalizeTargetKey(req.body?.input||"");if(!ownerKey||!targetKey)return res.status(400).json({ok:false,error:"invalid_request"});await pool.query(`UPDATE watch_items SET active=FALSE,updated_at=NOW() WHERE owner_key=$1 AND target_key=$2 AND type=$3`,[ownerKey,targetKey,type]);res.json({ok:true,watching:false});});
+app.get("/api/watch", rateLimit({ max:120 }), async(req,res)=>{if(!databaseReady||!pool)return res.json({ok:true,items:[],events:[]});const ownerKey=await getOwnerKey(req);if(!ownerKey)return res.json({ok:true,items:[],events:[]});const [items,events]=await Promise.all([pool.query(`SELECT target_key,type,target_preview,created_at,updated_at FROM watch_items WHERE owner_key=$1 AND active=TRUE ORDER BY updated_at DESC LIMIT 100`,[ownerKey]),pool.query(`SELECT target_key,type,message,before_score,after_score,created_at FROM watch_events WHERE owner_key=$1 ORDER BY created_at DESC LIMIT 50`,[ownerKey])]);res.json({ok:true,items:items.rows,events:events.rows});});
+
+app.post("/api/share-check", rateLimit({max:60}), async(req,res)=>{if(!databaseReady||!pool)return res.status(503).json({ok:false,error:"database_unavailable"});const report=req.body?.report;if(!report||typeof report!=="object")return res.status(400).json({ok:false,error:"report_required"});const shareId=crypto.randomBytes(8).toString("hex");await pool.query(`INSERT INTO shared_checks (share_id,report,input_preview) VALUES ($1,$2::jsonb,$3)`,[shareId,JSON.stringify(report),compactSpaces(req.body?.inputPreview||"").slice(0,300)]);res.json({ok:true,shareId,url:`${APP_BASE_URL}/share/${shareId}`,reportUrl:`${APP_BASE_URL}/report/${shareId}`});});
+app.get("/api/shared/:id",rateLimit({max:180}),async(req,res)=>{if(!databaseReady||!pool)return res.status(503).json({ok:false,error:"database_unavailable"});const id=String(req.params.id||"");if(!/^[a-f0-9]{16}$/i.test(id))return res.status(400).json({ok:false,error:"invalid_id"});const {rows}=await pool.query(`SELECT share_id,report,input_preview,created_at FROM shared_checks WHERE share_id=$1 LIMIT 1`,[id]);if(!rows[0])return res.status(404).json({ok:false,error:"not_found"});res.json({ok:true,item:rows[0]});});
+
+function sharedHtml(item,printMode=false){const r=item.report||{};const esc=v=>String(v??"").replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));const ev=(r.evidence?.items||[]).slice(0,80).map(x=>`<li><b>${esc(x.title)}</b> — ${esc(x.detail)} <small>(${esc(x.confidence)})</small></li>`).join("");const ch=(r.changesSinceLastCheck?.items||[]).map(x=>`<li>${esc(x)}</li>`).join("");const rel=(r.relatedObjects||[]).map(x=>`<li>${esc(x.type)}: ${esc(x.targetKey)} — ${esc(x.note)}</li>`).join("");return `<!doctype html><html lang="uk"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SafeDeal Report ${esc(r.id||item.share_id)}</title><style>body{font-family:Arial,sans-serif;background:#07111f;color:#eef6ff;max-width:900px;margin:auto;padding:28px}article{background:#0d1a2b;border:1px solid #223750;border-radius:20px;padding:24px}.risk{font-size:34px;font-weight:900}.score,.muted{opacity:.65}.box{margin-top:18px;padding:16px;background:#101f32;border-radius:14px}li{margin:8px 0;line-height:1.45}.actions{display:flex;gap:10px;margin:18px 0}.actions a,.actions button{padding:11px 14px;border-radius:10px;border:0;text-decoration:none;background:#2086ff;color:#fff;font-weight:700}@media print{body{background:white;color:#111;padding:0}article{background:white;border:0}.actions{display:none}}</style></head><body><article><h1>SafeDeal Security Report</h1><div class="muted">ID: SD-${esc(item.share_id.toUpperCase())} · ${esc(new Date(item.created_at).toLocaleString("uk-UA"))}</div><div class="box"><div class="risk">${esc(r.label||"Результат")}</div><div class="score">${esc(r.score??0)}/100</div><h3>Ймовірна схема</h3><p>${esc(r.scamScheme?.label||"Не визначено")}</p><h3>Простими словами</h3><p>${esc(r.plainSummary||r.verdict?.text||"")}</p></div><div class="box"><h3>Докази та сигнали</h3><ul>${ev||"<li>Немає окремих доказів у збереженому результаті.</li>"}</ul><p class="muted">${esc(r.evidence?.note||"")}</p></div>${ch?`<div class="box"><h3>Що змінилося</h3><ul>${ch}</ul></div>`:""}${rel?`<div class="box"><h3>Пов’язані об’єкти</h3><ul>${rel}</ul></div>`:""}<div class="box"><h3>Рекомендації</h3><ul>${(r.actions||[]).map(x=>`<li>${esc(x)}</li>`).join("")}</ul></div><div class="actions"><a href="/?recheck=${encodeURIComponent(item.input_preview||"")}">Перевірити самому</a>${printMode?"":`<button onclick="window.print()">PDF / друк</button>`}</div><p class="muted">Результат актуальний на момент перевірки. Це оцінка доступних сигналів, не гарантія безпеки.</p></article></body></html>`;}
+app.get("/share/:id",rateLimit({max:180}),async(req,res)=>{if(!databaseReady||!pool)return res.status(503).send("Database unavailable");const id=String(req.params.id||"");if(!/^[a-f0-9]{16}$/i.test(id))return res.status(400).send("Invalid report id");const {rows}=await pool.query(`SELECT share_id,report,input_preview,created_at FROM shared_checks WHERE share_id=$1 LIMIT 1`,[id]);if(!rows[0])return res.status(404).send("Report not found");res.type("html").send(sharedHtml(rows[0],false));});
+app.get("/report/:id",rateLimit({max:180}),async(req,res)=>{if(!databaseReady||!pool)return res.status(503).send("Database unavailable");const id=String(req.params.id||"");if(!/^[a-f0-9]{16}$/i.test(id))return res.status(400).send("Invalid report id");const {rows}=await pool.query(`SELECT share_id,report,input_preview,created_at FROM shared_checks WHERE share_id=$1 LIMIT 1`,[id]);if(!rows[0])return res.status(404).send("Report not found");res.type("html").send(sharedHtml(rows[0],true));});
+
+app.get("/api/passport",rateLimit({max:120}),async(req,res)=>{if(!databaseReady||!pool)return res.status(503).json({ok:false,error:"database_unavailable"});const type=ALLOWED_TYPES.has(req.query.type)?req.query.type:"seller";const input=String(req.query.input||"").trim();const targetKey=normalizeTargetKey(input);if(!targetKey)return res.status(400).json({ok:false,error:"input_required"});const er=await pool.query(`SELECT entity_kind,entity_value FROM object_entities WHERE target_key=$1 AND type=$2`,[targetKey,type]);const entities=er.rows.map(x=>({kind:x.entity_kind,value:x.entity_value}));const related=await getRelatedObjects(targetKey,type,entities);const [snapshots,complaints,archive]=await Promise.all([pool.query(`SELECT score,label,scheme_key,complaint_count,review_count,created_at FROM target_snapshots WHERE target_key=$1 AND type=$2 ORDER BY created_at DESC LIMIT 50`,[targetKey,type]),pool.query(`SELECT COUNT(*)::int AS count FROM community_reports WHERE target_key=$1 AND status='approved'`,[targetKey]),pool.query(`SELECT COUNT(*)::int AS count FROM review_evidence WHERE target_key=$1 AND status='verified'`,[targetKey])]);const rows=snapshots.rows;res.json({ok:true,passport:{targetKey,type,latest:rows[0]||null,checks:rows.length,approvedComplaints:Number(complaints.rows[0]?.count||0),archivedReviews:Number(archive.rows[0]?.count||0),history:rows.map(x=>({score:x.score,label:x.label,schemeKey:x.scheme_key,createdAt:x.created_at})),related}});});
+app.post("/api/image-fingerprint",rateLimit({max:80}),async(req,res)=>{if(!databaseReady||!pool)return res.status(503).json({ok:false,error:"database_unavailable"});const ahash=String(req.body?.ahash||"").toLowerCase();if(!/^[0-9a-f]{16}$/.test(ahash))return res.status(400).json({ok:false,error:"invalid_hash"});const targetPreview=compactSpaces(req.body?.target||"").slice(0,300);const targetKey=normalizeTargetKey(targetPreview);const {rows}=await pool.query(`SELECT id,ahash,target_key,target_preview,source_label,created_at FROM image_fingerprints ORDER BY created_at DESC LIMIT 1000`);const matches=rows.map(row=>({...row,distance:hammingDistanceHex64(ahash,row.ahash)})).filter(row=>row.distance<=8&&(!targetKey||row.target_key!==targetKey)).sort((x,y)=>x.distance-y.distance).slice(0,20);await pool.query(`INSERT INTO image_fingerprints (ahash,target_key,target_preview) VALUES ($1,$2,$3)`,[ahash,targetKey,targetPreview]);res.json({ok:true,exactOrSimilarCount:matches.length,matches:matches.map(x=>({similarity:Math.max(0,Math.round((1-x.distance/64)*100)),target:x.target_preview,source:x.source_label,createdAt:x.created_at})),note:"Антифейк-фото порівнює зображення з власною історією SafeDeal. Це не глобальний reverse-image search по всьому інтернету."});});
+
 app.post("/api/check", rateLimit({ max: 80 }), async (req, res) => {
   const { type = "seller", input = "", historyPreview = "" } = req.body || {};
-
-  if (!String(input).trim()) {
-    return res.status(400).json({ ok: false, error: "input_required" });
-  }
-
-  if (String(input).length > 12000) {
-    return res.status(413).json({ ok: false, error: "input_too_long" });
-  }
-
+  if (!String(input).trim()) return res.status(400).json({ ok:false, error:"input_required" });
+  if (String(input).length > 12000) return res.status(413).json({ ok:false, error:"input_too_long" });
   try {
     const report = await analyzeInput(type, input);
     const clientId = getClientId(req);
+    const authUser = (clientId && databaseReady) ? await getAuthUser(req) : null;
     let historySaved = false;
     if (clientId && databaseReady) {
-      try {
-        const authUser = await getAuthUser(req);
-        historySaved = await saveCheckHistory(clientId, authUser?.id || null, report, compactSpaces(historyPreview || input).slice(0, 500));
-      } catch (historyError) {
-        console.error("History save error:", historyError.message);
-      }
+      try { historySaved = await saveCheckHistory(clientId, authUser?.id || null, report, compactSpaces(historyPreview || input).slice(0,500)); }
+      catch (historyError) { console.error("History save error:", historyError.message); }
     }
-    res.json({ ok: true, report, historySaved });
-  } catch (error) {
-    console.error("SafeDeal check error:", error);
-    res.status(500).json({ ok: false, error: "check_failed" });
-  }
+    const targetKey = normalizeTargetKey(input); report.targetKey = targetKey;
+    if (databaseReady && pool && targetKey) {
+      const entities=extractObjectEntities(report.type,input,report);
+      await persistEntities(targetKey,report.type,entities);
+      report.relatedObjects=await getRelatedObjects(targetKey,report.type,entities);
+      report.changesSinceLastCheck=await saveTargetSnapshot({targetKey,type:report.type,report,input});
+      const ownerKey=authUser?.id?`user:${authUser.id}`:(clientId?`client:${clientId}`:"");
+      report.watchEventCreated=await createWatchEventIfNeeded(ownerKey,targetKey,report.type,report.changesSinceLastCheck,report.score);
+      const watched=ownerKey?await pool.query(`SELECT 1 FROM watch_items WHERE owner_key=$1 AND target_key=$2 AND type=$3 AND active=TRUE LIMIT 1`,[ownerKey,targetKey,report.type]):{rowCount:0};
+      report.isWatched=Boolean(watched.rowCount);
+    } else {
+      report.relatedObjects=[]; report.changesSinceLastCheck={firstCheck:true,changed:false,items:[],scoreDelta:0}; report.isWatched=false;
+    }
+    res.json({ok:true,report,historySaved});
+  } catch(error) { console.error("SafeDeal check error:",error); res.status(500).json({ok:false,error:"check_failed"}); }
 });
 
 app.use(express.static(__dirname));

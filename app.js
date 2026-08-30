@@ -3,6 +3,10 @@ const $$ = (s) => [...document.querySelectorAll(s)];
 
 const state = {
   currentReviewArchive: null,
+  currentEvidence: null,
+  currentReport: null,
+  currentInput: "",
+  currentShare: null,
   type: "seller",
   screenshotFile: null,
   screenshotOcrText: ""
@@ -563,9 +567,19 @@ $("#runCheck").addEventListener("click", async () => {
     if (!data.ok) throw new Error(data.error || "check_failed");
 
     const r = data.report;
-    $("#reportId").textContent = r.id;
-    $("#scoreValue").textContent = r.score;
-    $("#scoreLabel").textContent = r.label;
+    state.currentReport = r; state.currentInput = input; state.currentShare = null;
+    $("#reportId").textContent = r.id; $("#scoreValue").textContent = r.score; $("#scoreLabel").textContent = r.label;
+    $("#riskHeadline").textContent = r.label; $("#riskScoreSecondary").textContent = `${r.score}/100`;
+    $("#schemeLabel").textContent = r.scamScheme?.label || "Схему не визначено";
+    $("#schemeConfidence").textContent = r.scamScheme?.confidence ? `Надійність сигналу: ${r.scamScheme.confidence}` : "";
+    state.currentEvidence = r.evidence || { items: [] }; $("#evidenceCount").textContent = `${Number(r.evidence?.total || 0)} сигналів`;
+    const changeBox=$("#changeBox");
+    if(r.changesSinceLastCheck?.changed){$("#changeList").innerHTML=r.changesSinceLastCheck.items.map(x=>`<div>• ${escapeHtml(x)}</div>`).join("");changeBox.classList.remove("hidden");}
+    else if(r.changesSinceLastCheck?.firstCheck){$("#changeList").innerHTML=`<div>Це перший збережений знімок цього об’єкта в SafeDeal.</div>`;changeBox.classList.remove("hidden");}
+    else changeBox.classList.add("hidden");
+    const relatedBox=$("#relatedBox");
+    if(r.relatedObjects?.length){$("#relatedList").innerHTML=r.relatedObjects.slice(0,6).map(x=>`<div class="related-item"><b>${escapeHtml(x.type)}</b><span>${escapeHtml(x.targetKey)}</span><small>${escapeHtml(x.note)}</small></div>`).join("");relatedBox.classList.remove("hidden");}else relatedBox.classList.add("hidden");
+    $("#watchBtn").textContent=r.isWatched?"✓ SafeDeal Watch активний":"👁 Стежити";
 
     const verdict = r.verdict || {};
     const verdictBox = $("#verdictBox");
@@ -1155,3 +1169,16 @@ if (removeScreenshot) {
     }
   });
 }
+
+function openEvidenceModal(){const modal=$("#evidenceModal"),list=$("#evidenceItems"),note=$("#evidenceNote"),ev=state.currentEvidence||{items:[]},labels={high:"Висока",medium:"Середня",low:"Низька"};list.innerHTML=(ev.items||[]).length?ev.items.map(x=>`<article class="evidence-item evidence-${escapeHtml(x.kind||"context")}"><div class="evidence-item-head"><b>${escapeHtml(x.title||"Сигнал")}</b><span>${escapeHtml(labels[x.confidence]||x.confidence||"—")} надійність</span></div><p>${escapeHtml(x.detail||"")}</p><small>Джерело: ${escapeHtml(x.source||"SafeDeal")}</small></article>`).join(""):`<div class="empty-state">Окремих доказів у цьому результаті немає.</div>`;note.textContent=ev.note||"";modal.classList.remove("hidden");}
+async function ensureSharedCheck(){if(state.currentShare?.url)return state.currentShare;if(!state.currentReport)throw new Error("Спочатку виконай перевірку");const res=await apiFetch("/api/share-check",{method:"POST",body:JSON.stringify({report:state.currentReport,inputPreview:state.currentInput})});const data=await res.json();if(!data.ok)throw new Error(data.error||"share_failed");state.currentShare=data;return data;}
+$("#evidenceBtn")?.addEventListener("click",openEvidenceModal);$("#closeEvidence")?.addEventListener("click",()=>closeModal("#evidenceModal"));$("#evidenceModal")?.addEventListener("click",e=>{if(e.target.id==="evidenceModal")closeModal("#evidenceModal");});
+$("#shareCheckBtn")?.addEventListener("click",async()=>{try{const sh=await ensureSharedCheck();if(navigator.share)await navigator.share({title:"SafeDeal — результат перевірки",text:`${state.currentReport?.label||"Результат"} · ${state.currentReport?.score||0}/100`,url:sh.url});else{await navigator.clipboard.writeText(sh.url);alert("Посилання скопійовано.");}}catch(e){alert(`Не вдалося поділитися: ${e.message}`);}});
+$("#reportBtn")?.addEventListener("click",async()=>{try{const sh=await ensureSharedCheck();window.open(sh.reportUrl,"_blank","noopener");}catch(e){alert(`Не вдалося створити звіт: ${e.message}`);}});
+$("#watchBtn")?.addEventListener("click",async()=>{if(!state.currentReport||!state.currentInput)return;try{const active=$("#watchBtn").textContent.includes("активний");const res=await apiFetch("/api/watch",{method:active?"DELETE":"POST",body:JSON.stringify({type:state.currentReport.type,input:state.currentInput})});const data=await res.json();if(!data.ok)throw new Error(data.error||"watch_failed");$("#watchBtn").textContent=data.watching?"✓ SafeDeal Watch активний":"👁 Стежити";}catch(e){alert(`SafeDeal Watch: ${e.message}`);}});
+$("#passportBtn")?.addEventListener("click",async()=>{if(!state.currentReport||!state.currentInput)return;const modal=$("#passportModal"),body=$("#passportBody");body.innerHTML=`<div class="empty-state">Завантажуємо...</div>`;modal.classList.remove("hidden");try{const res=await apiFetch(`/api/passport?type=${encodeURIComponent(state.currentReport.type)}&input=${encodeURIComponent(state.currentInput)}`);const data=await res.json();if(!data.ok)throw new Error(data.error||"passport_failed");const p=data.passport;body.innerHTML=`<div class="passport-grid"><div><strong>${Number(p.latest?.score||0)}/100</strong><span>Останній ризик</span></div><div><strong>${Number(p.checks||0)}</strong><span>Збережених перевірок</span></div><div><strong>${Number(p.approvedComplaints||0)}</strong><span>Схвалених скарг</span></div><div><strong>${Number(p.archivedReviews||0)}</strong><span>Архівних доказів</span></div></div><h4>Історія</h4><div class="passport-history">${(p.history||[]).slice(0,12).map(x=>`<div><b>${escapeHtml(x.label||"")}</b><span>${Number(x.score||0)}/100</span><small>${new Date(x.createdAt).toLocaleString("uk-UA")}</small></div>`).join("")||"Поки немає історії."}</div><h4>Пов’язані об’єкти</h4><div>${(p.related||[]).map(x=>`<div class="related-item"><b>${escapeHtml(x.type)}</b><span>${escapeHtml(x.targetKey)}</span><small>${escapeHtml(x.note)}</small></div>`).join("")||"Підтверджених зв’язків не знайдено."}</div>`;}catch(e){body.innerHTML=`<div class="empty-state">Не вдалося завантажити Passport: ${escapeHtml(e.message)}</div>`;}});
+$("#closePassport")?.addEventListener("click",()=>closeModal("#passportModal"));$("#passportModal")?.addEventListener("click",e=>{if(e.target.id==="passportModal")closeModal("#passportModal");});
+$("#prepayOpen")?.addEventListener("click",()=>$("#prepayPanel")?.classList.toggle("hidden"));$("#prepayEvaluate")?.addEventListener("click",()=>{const boxes=$$("#prepayPanel input[type=checkbox]"),dangerous=boxes.filter(x=>x.checked&&x.dataset.risk==="1").length,protective=boxes.filter(x=>x.checked&&x.dataset.safe==="1").length,out=$("#prepayResult");if(dangerous>=3)out.innerHTML=`<b>Краще не оплачувати зараз.</b><span>Є кілька сильних ознак ризику.</span>`;else if(dangerous>=1)out.innerHTML=`<b>Продовжуй лише з обережністю.</b><span>Не переказуй гроші, доки ризикові пункти не перевірені.</span>`;else if(protective>=2)out.innerHTML=`<b>Сильних тривожних пунктів у чеклісті немає.</b><span>Це не гарантія безпеки — виконай основну перевірку.</span>`;else out.innerHTML=`<b>Заповни чекліст.</b><span>Познач те, що відповідає ситуації.</span>`;});
+async function computeAHash(file){const bitmap=await createImageBitmap(file),canvas=document.createElement("canvas");canvas.width=8;canvas.height=8;const ctx=canvas.getContext("2d",{willReadFrequently:true});ctx.drawImage(bitmap,0,0,8,8);const data=ctx.getImageData(0,0,8,8).data,vals=[];for(let i=0;i<data.length;i+=4)vals.push(data[i]*.299+data[i+1]*.587+data[i+2]*.114);const avg=vals.reduce((x,y)=>x+y,0)/vals.length;let bits="";vals.forEach(v=>bits+=v>=avg?"1":"0");let hex="";for(let i=0;i<64;i+=4)hex+=parseInt(bits.slice(i,i+4),2).toString(16);return hex;}
+$("#antiFakeRun")?.addEventListener("click",async()=>{const file=$("#antiFakeFile")?.files?.[0],out=$("#antiFakeResult");if(!file){out.textContent="Вибери фото товару або оголошення.";return;}out.textContent="Порівнюємо з історією SafeDeal...";try{const ahash=await computeAHash(file),target=$("#antiFakeTarget")?.value||state.currentInput||"",res=await apiFetch("/api/image-fingerprint",{method:"POST",body:JSON.stringify({ahash,target})}),data=await res.json();if(!data.ok)throw new Error(data.error||"image_check_failed");out.innerHTML=data.exactOrSimilarCount?`<b>Знайдено схожих зображень: ${data.exactOrSimilarCount}</b><div>${data.matches.map(x=>`• ${x.similarity}% схожості — ${escapeHtml(x.target||"інший об’єкт")}`).join("<br>")}</div><small>${escapeHtml(data.note)}</small>`:`<b>Збігів у власній історії SafeDeal не знайдено.</b><small>${escapeHtml(data.note)}</small>`;}catch(e){out.textContent=`Не вдалося перевірити фото: ${e.message}`;}});
+const recheck=new URLSearchParams(location.search).get("recheck");if(recheck){$("#checkInput").value=recheck;setTimeout(()=>$("#quickCheck")?.scrollIntoView({behavior:"smooth"}),250);}

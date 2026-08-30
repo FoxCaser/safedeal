@@ -142,6 +142,12 @@
           <button data-check="olx"><i class="v8-icon olx">OLX</i><span><b>OLX</b><small>Оголошення / продавець</small></span></button>
         </section>
 
+        <section class="v9-tools">
+          <div class="v9-tool-card"><div><span class="eyebrow">BEFORE PAYMENT</span><h3>Перед оплатою</h3><p>Швидкий чекліст перед переказом грошей.</p></div><button class="secondary-btn" id="prepayOpen" type="button">Відкрити чекліст</button></div>
+          <div class="prepay-panel hidden" id="prepayPanel"><label><input type="checkbox" data-risk="1"> Продавець тисне: «плати зараз»</label><label><input type="checkbox" data-risk="1"> Просить перейти в інший месенджер</label><label><input type="checkbox" data-risk="1"> Надіслав стороннє посилання для оплати/доставки</label><label><input type="checkbox" data-risk="1"> Змінив реквізити перед оплатою</label><label><input type="checkbox" data-safe="1"> Є післяплата / безпечний спосіб оплати</label><label><input type="checkbox" data-safe="1"> Контакти та профіль збігаються</label><button class="primary" id="prepayEvaluate" type="button">Оцінити чекліст</button><div class="prepay-result" id="prepayResult"></div></div>
+          <div class="v9-tool-card"><div><span class="eyebrow">ANTI-FAKE PHOTO</span><h3>Антифейк фото</h3><p>Порівняння фото товару з власною історією SafeDeal.</p></div></div>
+          <div class="anti-fake-panel"><input type="file" id="antiFakeFile" accept="image/*"><input class="text-input" id="antiFakeTarget" placeholder="Продавець / оголошення (необов’язково)"><button class="secondary-btn" id="antiFakeRun" type="button">Перевірити фото</button><div id="antiFakeResult" class="anti-fake-result"></div></div>
+        </section>
         <div class="v81-result-title">ПРИКЛАД / РЕЗУЛЬТАТ ПЕРЕВІРКИ</div>
         <section class="result-card hidden" id="resultCard">
           <div class="result-top">
@@ -163,23 +169,22 @@
             </div>
           </div>
 
-          <div class="result-grid">
-            <div class="score-column">
-              <div class="score-ring" id="scoreRing">
-                <div><strong id="scoreValue">0</strong><span>/100</span></div>
-              </div>
-              <b id="scoreLabel">—</b>
-            </div>
-            <div>
-              <h4>Що знайшов SafeDeal:</h4>
-              <div class="reason-list" id="reasonList"></div>
-            </div>
+          <div class="risk-level-hero">
+            <div><span class="eyebrow">РІВЕНЬ РИЗИКУ</span><h2 id="riskHeadline">—</h2><span class="risk-score-secondary" id="riskScoreSecondary">0/100</span></div>
+            <div class="score-ring score-ring-small" id="scoreRing"><div><strong id="scoreValue">0</strong><span>/100</span></div></div>
           </div>
+          <div class="scheme-box"><span>ЙМОВІРНА СХЕМА</span><b id="schemeLabel">—</b><small id="schemeConfidence"></small></div>
+          <div class="result-grid result-grid-v9"><div><h4>Що знайшов SafeDeal:</h4><div class="reason-list" id="reasonList"></div></div></div>
+          <b id="scoreLabel" class="hidden">—</b>
 
           <div class="plain-summary-box hidden" id="plainSummaryBox">
             <span class="plain-summary-kicker">ПРОСТИМИ СЛОВАМИ</span>
             <p id="plainSummaryText"></p>
           </div>
+          <button class="evidence-main-btn" id="evidenceBtn" type="button"><span><b>🧾 Докази</b><small>Чому SafeDeal дав саме такий рівень</small></span><strong id="evidenceCount">0 сигналів</strong><i>›</i></button>
+          <div class="change-box hidden" id="changeBox"><span class="plain-summary-kicker">ЩО ЗМІНИЛОСЯ З МИНУЛОЇ ПЕРЕВІРКИ</span><div id="changeList"></div></div>
+          <div class="related-box hidden" id="relatedBox"><span class="plain-summary-kicker">ПОВ’ЯЗАНІ ОБ’ЄКТИ</span><div id="relatedList"></div></div>
+          <div class="result-actions-v9"><button class="secondary-btn" id="watchBtn" type="button">👁 Стежити</button><button class="secondary-btn" id="passportBtn" type="button">🛡 SafeDeal Passport</button><button class="secondary-btn" id="shareCheckBtn" type="button">↗ Поділитися</button><button class="primary" id="reportBtn" type="button">📄 Створити звіт</button></div>
 
           <button class="review-archive-link hidden" id="reviewArchiveBtn" type="button">
             <span>🗂️ Видалені / приховані відгуки</span>
@@ -392,6 +397,8 @@
     </nav>
   </div>
 
+  <div class="sd-modal hidden" id="evidenceModal" role="dialog" aria-modal="true" aria-labelledby="evidenceTitle"><div class="sd-modal-card evidence-modal-card"><button class="sd-modal-close" id="closeEvidence" type="button">×</button><span class="eyebrow">EVIDENCE</span><h3 id="evidenceTitle">Докази та сигнали</h3><p class="sd-modal-note" id="evidenceNote"></p><div class="evidence-items" id="evidenceItems"></div></div></div>
+  <div class="sd-modal hidden" id="passportModal" role="dialog" aria-modal="true" aria-labelledby="passportTitle"><div class="sd-modal-card evidence-modal-card"><button class="sd-modal-close" id="closePassport" type="button">×</button><span class="eyebrow">SAFEDEAL PASSPORT</span><h3 id="passportTitle">Історія та профіль ризику</h3><div id="passportBody"></div></div></div>
   <div class="sd-modal hidden" id="reviewArchiveModal" role="dialog" aria-modal="true" aria-labelledby="reviewArchiveTitle">
     <div class="sd-modal-card">
       <button class="sd-modal-close" id="closeReviewArchive" type="button" aria-label="Закрити">×</button>
