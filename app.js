@@ -574,11 +574,22 @@ $("#runCheck").addEventListener("click", async () => {
     $("#schemeConfidence").textContent = r.scamScheme?.confidence ? `Надійність сигналу: ${r.scamScheme.confidence}` : "";
     state.currentEvidence = r.evidence || { items: [] }; $("#evidenceCount").textContent = `${Number(r.evidence?.total || 0)} сигналів`;
     const changeBox=$("#changeBox");
-    if(r.changesSinceLastCheck?.changed){$("#changeList").innerHTML=r.changesSinceLastCheck.items.map(x=>`<div>• ${escapeHtml(x)}</div>`).join("");changeBox.classList.remove("hidden");}
-    else if(r.changesSinceLastCheck?.firstCheck){$("#changeList").innerHTML=`<div>Це перший збережений знімок цього об’єкта в SafeDeal.</div>`;changeBox.classList.remove("hidden");}
+    const changeState=r.changesSinceLastCheck||{};
+    if(changeState.error){$("#changeList").innerHTML=`<div class="change-warning">Історія змін тимчасово недоступна. Поточний результат перевірки збережено окремо в історії.</div>`;changeBox.classList.remove("hidden");}
+    else if(changeState.changed){$("#changeList").innerHTML=changeState.items.map(x=>`<div>• ${escapeHtml(x)}</div>`).join("");changeBox.classList.remove("hidden");}
+    else if(changeState.firstCheck){$("#changeList").innerHTML=`<div>Це перший збережений знімок цього об’єкта в SafeDeal.</div>`;changeBox.classList.remove("hidden");}
+    else if(changeState.snapshotSaved){$("#changeList").innerHTML=`<div class="change-stable">✓ Порівняно з попередньою перевіркою. Значущих змін не виявлено.</div>`;changeBox.classList.remove("hidden");}
     else changeBox.classList.add("hidden");
-    const relatedBox=$("#relatedBox");
-    if(r.relatedObjects?.length){$("#relatedList").innerHTML=r.relatedObjects.slice(0,6).map(x=>`<div class="related-item"><b>${escapeHtml(x.type)}</b><span>${escapeHtml(x.targetKey)}</span><small>${escapeHtml(x.note)}</small></div>`).join("");relatedBox.classList.remove("hidden");}else relatedBox.classList.add("hidden");
+
+    const relatedBox=$("#relatedBox"), relatedList=$("#relatedList"), rel=r.relatedObjects||[];
+    const confidenceLabel=v=>v==="high"?"Високий зв’язок":v==="medium"?"Середній зв’язок":"Слабкий зв’язок";
+    if(rel.length){
+      relatedList.innerHTML=`<div class="relation-summary"><b>Знайдено пов’язаних об’єктів: ${rel.length}</b><small>SafeDeal об’єднує їх лише за конкретними збігами даних. Це не доказ, що ними керує одна людина.</small></div><div class="relation-map"><div class="relation-current">Поточний об’єкт<br><strong>${escapeHtml(r.targetKey||state.currentInput)}</strong></div>${rel.slice(0,8).map(x=>`<div class="relation-edge"><span>${escapeHtml(x.matchedBy||"збіг")}</span></div><div class="related-item confidence-${escapeHtml(x.confidence||"medium")}"><div class="related-head"><b>${escapeHtml(typeLabel(x.type)||x.type)}</b><em>${confidenceLabel(x.confidence)}</em></div><span>${escapeHtml(x.targetKey)}</span><small>${escapeHtml(x.note)}</small></div>`).join("")}</div>`;
+      relatedBox.classList.remove("hidden");
+    } else {
+      relatedList.innerHTML=`<div class="relation-empty">Підтверджених зв’язків з іншими профілями, номерами або сайтами поки не знайдено.</div>`;
+      relatedBox.classList.remove("hidden");
+    }
     $("#watchBtn").textContent=r.isWatched?"✓ SafeDeal Watch активний":"👁 Стежити";
 
     const verdict = r.verdict || {};
@@ -1273,6 +1284,9 @@ $("#antiFakeRun")?.addEventListener("click",async()=>{
     let html=`<div class="anti-fake-summary"><b>Результат перевірки фото</b><span>SafeDeal: ${Number(local.exactOrSimilarCount||0)} · Інтернет: ${internetCount}</span></div>`;
     if(internet.ok&&internetCount){
       const summary=antiFakeHumanSummary(exact,visual),g=summary.groups;
+      const listingCount=g.listing.length, catalogCount=g.catalog.length;
+      const photoRisk=listingCount>=8?{level:"Високий ризик фото",cls:"high",text:"Те саме або дуже схоже фото масово зустрічається в інших оголошеннях продавців."}:listingCount>=2?{level:"Середній ризик фото",cls:"medium",text:"Фото зустрічається в кількох інших оголошеннях. Варто попросити свіже фото товару."}:catalogCount>0?{level:"Низький ризик фото",cls:"low",text:"Збіги переважно схожі на магазини або каталоги. Для офіційного фото товару це нормально."}:{level:"Недостатньо даних",cls:"neutral",text:"Збіги є, але їх недостатньо, щоб оцінити походження фото впевнено."};
+      html+=`<div class="photo-risk-badge ${photoRisk.cls}"><span>РИЗИК САМЕ ПО ФОТО</span><b>${escapeHtml(photoRisk.level)}</b><small>${escapeHtml(photoRisk.text)}</small></div>`;
       html+=`<div class="anti-fake-verdict ${summary.tone}"><span>ПРОСТИМИ СЛОВАМИ</span><b>${escapeHtml(summary.title)}</b><p>${escapeHtml(summary.text)}</p></div>`;
       html+=`<div class="anti-fake-meaning"><strong>Що означають ці посилання?</strong><p>Це сторінки, де Google Lens побачив те саме або схоже фото. Вони показані як джерела для перевірки — не як список шахраїв.</p></div>`;
       html+=`<div class="anti-fake-categories"><div><b>${g.catalog.length}</b><span>магазини / каталоги</span></div><div><b>${g.listing.length}</b><span>інші оголошення</span></div><div><b>${g.other.length}</b><span>інші сайти</span></div></div>`;

@@ -2,7 +2,7 @@
   "name": "safedeal",
   "version": "9.0.2",
   "private": true,
-  "description": "SafeDeal 9.0.2 — clearer global anti-fake photo analysis and categorized internet matches.",
+  "description": "SafeDeal 9.1.2 — clearer global anti-fake photo analysis and categorized internet matches.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

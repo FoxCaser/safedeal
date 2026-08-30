@@ -2800,6 +2800,22 @@ function analyzeTextSignals(type, input) {
     add(8, "Використовується скорочене посилання, яке приховує кінцеву адресу");
   }
 
+  // OCR/text phishing combinations: delivery + address verification + link/urgency.
+  // Combined signals are stronger than any single keyword and help when OCR text is imperfect.
+  if (type === "text") {
+    const deliveryBrand = /(укрпошт|нова\s*пошт|novaposhta|delivery|доставк|посилк)/i.test(text);
+    const addressVerify = /(неповн.{0,15}адрес|підтверд.{0,35}адрес|онов.{0,25}адрес|адрес.{0,35}(підтверд|онов))/i.test(text);
+    const hasUrl = /https?:\/\/|\b[a-z0-9-]+\.(?:top|site|shop|online|info|xyz|click|live)\b/i.test(text);
+    const suspiciousTld = /\.(?:top|xyz|click|site|online|info|live)(?:\/|\b)/i.test(text);
+    if (deliveryBrand && addressVerify && hasUrl) {
+      add(18, "Повідомлення про доставку просить підтвердити адресу через посилання — це поширений фішинговий сценарій");
+      actions.add("Відкрийте офіційний застосунок служби доставки вручну та перевірте відправлення там.");
+    }
+    if (suspiciousTld && (urgency.test(text) || verifyData.test(text) || addressVerify)) {
+      add(10, "Посилання використовує нетиповий домен у повідомленні з терміновою перевіркою даних");
+    }
+  }
+
   if (type === "job") {
     if (telegram.test(text)) {
       add(6, "Вакансія переводить спілкування в Telegram");
@@ -3259,16 +3275,24 @@ function snapshotDiff(previous,current) {
   return {firstCheck:false,changed:items.length>0,items,scoreDelta:delta};
 }
 async function saveTargetSnapshot({targetKey,type,report,input}) {
-  if(!databaseReady||!pool||!targetKey) return {firstCheck:true,changed:false,items:[],scoreDelta:0};
+  if(!databaseReady||!pool||!targetKey) return {firstCheck:true,changed:false,items:[],scoreDelta:0,snapshotSaved:false};
   try{
-    const prev=await pool.query(`SELECT score,scheme_key,complaint_count,review_count,created_at FROM target_snapshots WHERE target_key=$1 AND type=$2 ORDER BY created_at DESC LIMIT 1`,[targetKey,type]);
-    const row=prev.rows[0]; const previous=row?{score:Number(row.score||0),schemeKey:row.scheme_key||"",complaintCount:Number(row.complaint_count||0),reviewCount:Number(row.review_count||0),createdAt:row.created_at}:null;
+    const prev=await pool.query(`SELECT id,score,scheme_key,complaint_count,review_count,created_at FROM target_snapshots WHERE target_key=$1 AND type=$2 ORDER BY id DESC LIMIT 1`,[targetKey,type]);
+    const row=prev.rows[0];
+    const previous=row?{id:Number(row.id),score:Number(row.score||0),schemeKey:row.scheme_key||"",complaintCount:Number(row.complaint_count||0),reviewCount:Number(row.review_count||0),createdAt:row.created_at}:null;
     const current={score:Number(report.score||0),schemeKey:report.scamScheme?.key||"",complaintCount:Number(report.communityMatches?.length||0),reviewCount:Number(report.reviewArchive?.confirmedCount||0)};
     const diff=snapshotDiff(previous,current);
-    await pool.query(`INSERT INTO target_snapshots (target_key,type,score,label,scheme_key,complaint_count,review_count,snapshot) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,[targetKey,type,current.score,report.label||"",current.schemeKey,current.complaintCount,current.reviewCount,JSON.stringify({targetPreview:compactSpaces(input).slice(0,500),reasons:report.reasons||[],facts:report.facts||[],scheme:report.scamScheme||null,technical:report.technical||null})]);
-    return {...diff,previousAt:previous?.createdAt||null};
-  }catch(error){console.error("Snapshot save failed:",error.message); return {firstCheck:true,changed:false,items:[],scoreDelta:0};}
+    // Keep snapshot JSON deliberately small and serializable. Scalars are stored in dedicated columns.
+    const payload={targetPreview:compactSpaces(input).slice(0,500),reasonCount:Array.isArray(report.reasons)?report.reasons.length:0,schemeLabel:report.scamScheme?.label||""};
+    const ins=await pool.query(`INSERT INTO target_snapshots (target_key,type,score,label,scheme_key,complaint_count,review_count,snapshot) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb) RETURNING id,created_at`,[targetKey,type,current.score,report.label||"",current.schemeKey,current.complaintCount,current.reviewCount,JSON.stringify(payload)]);
+    return {...diff,previousAt:previous?.createdAt||null,previousSnapshotId:previous?.id||null,currentSnapshotId:Number(ins.rows[0]?.id||0),snapshotSaved:true};
+  }catch(error){
+    console.error("Snapshot save failed:",error.message);
+    // Do not claim “first check” when persistence itself failed.
+    return {firstCheck:false,changed:false,items:["Історію змін тимчасово не вдалося зберегти."],scoreDelta:0,snapshotSaved:false,error:"snapshot_save_failed"};
+  }
 }
+
 async function createWatchEventIfNeeded(ownerKey,targetKey,type,changes,score) {
   if(!databaseReady||!pool||!ownerKey||!targetKey||!changes?.changed) return false;
   try{const watched=await pool.query(`SELECT 1 FROM watch_items WHERE owner_key=$1 AND target_key=$2 AND type=$3 AND active=TRUE LIMIT 1`,[ownerKey,targetKey,type]); if(!watched.rowCount) return false; const before=Number(score||0)-Number(changes.scoreDelta||0); await pool.query(`INSERT INTO watch_events (owner_key,target_key,type,event_type,message,before_score,after_score) VALUES ($1,$2,$3,'change',$4,$5,$6)`,[ownerKey,targetKey,type,changes.items.join(" • ").slice(0,1000),before,Number(score||0)]); return true;}catch(error){console.error("Watch event create failed:",error.message); return false;}
